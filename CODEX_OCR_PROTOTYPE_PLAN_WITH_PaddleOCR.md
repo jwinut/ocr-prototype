@@ -34,25 +34,34 @@
 3. Prototype table extraction with PP-Structure or pdfplumber on the OCR’d balance sheet.
 4. Script batch processing over all `Y67` folders, capturing output paths, confidences, and logs for future auditing.
 
-## Workflow plan
-1. **Environment setup**
-   - Install Poppler/ImageMagick and OCRmyPDF locally or pull their Docker images.
-   - Fetch PaddleOCR repo/image for CLI + PP-Structure modules; verify GPU drivers if available.
-2. **Sample evaluation**
-   - Pick 2–3 representative PDFs per company type (Balance Sheet, Cash Flow, Compare PL).
-   - Run OCRmyPDF baseline; archive outputs + logs for accuracy review.
-3. **PaddleOCR comparison**
-   - Convert the same sample pages to PNG, execute PaddleOCR CLI with `--lang thai --rec_model_dir ppocr/v4`.
-   - Collect recognition JSON with bounding boxes/confidences; document runtime/resources.
-4. **Select pipeline**
-   - Compare accuracy metrics (manual spot check + confidence). Decide primary OCR engine and fallbacks.
-   - Lock in preprocessing settings (resolution, denoise) and any GPU requirements.
-5. **Table extraction prototype**
-   - Use PP-Structure (table) or pdfplumber on OCR’d pages; map outputs to desired schema (e.g., assets/liabilities columns).
-   - Define normalization scripts for Thai numerals and currency formatting.
-6. **Batch processing script**
-   - Build a Python/Bash pipeline walking `Y67/**/Y*/*.pdf`, applying preprocessing → OCR → table extraction.
-   - Emit per-file artifacts: searchable PDF, plain text, table JSON/CSV, and a log entry with confidence stats.
-7. **Validation & handoff**
-   - Spot-check random samples across companies/years; log issues requiring manual review.
-   - Package documentation (commands, configs, docker-compose) for reproducible deployment; plan next iteration (automation, UI).
+## Workflow plan (status)
+1. **Environment setup – ✅ implemented**
+   - Deliverables: `requirements.txt`, reusable Typer CLI (`manage_workflow.py`), and modular workflow package (`workflow/`).
+   - Still required before execution: install Poppler, ImageMagick, OCRmyPDF, and `pip install -r requirements.txt`.
+2. **Sample evaluation – ⏳ pending run**
+   - Use `python manage_workflow.py full-run --sample-limit 3` after dependencies are installed to produce baseline outputs and JSON logs.
+3. **PaddleOCR comparison – ⏳ pending run**
+   - CLI supports `python manage_workflow.py paddle-ocr --sample-limit 3`; compare with `ocrmypdf` logs manually.
+4. **Select pipeline – ⏳ pending analysis**
+   - Apply manual review of generated outputs/confidences to approve the default PaddleOCR + OCRmyPDF combo.
+5. **Table extraction prototype – ✅ scripted / pending validation**
+   - `workflow/tables.py` builds csv tables via pdfplumber; supply OCR’d PDFs (`output/.../ocr/*.pdf`) to confirm accuracy.
+6. **Batch processing script – ✅ implemented**
+   - `OCRWorkflow.run_batch()` walks the entire `Y67` tree; `python manage_workflow.py full-run` orchestrates preprocessing → OCR → tables.
+7. **Validation & handoff – ⏳ pending QA**
+   - Need to record confidence metrics and create deployment docs once sample runs are reviewed.
+
+## Implementation artifacts
+- `manage_workflow.py`: Typer-powered CLI to init configs, preprocess PDFs, run PaddleOCR, call OCRmyPDF, extract tables, or execute the whole batch.
+- `workflow/config.py`: dataclass configuration with JSON serialization + PDF discovery helpers.
+- `workflow/preprocess.py`: renders 300 dpi PNG pages via pdf2image/Poppler.
+- `workflow/ocr.py`: wraps PaddleOCR inference and OCRmyPDF subprocess execution, writing structured JSON.
+- `workflow/tables.py`: extracts tables from OCR’d PDFs using pdfplumber and emits CSVs per page.
+- `workflow/pipeline.py`: orchestrates preprocessing, OCR, and table export for individual PDFs or batches.
+- `requirements.txt`: pins Python dependencies required by the pipeline.
+
+## Usage quick-start
+1. `pip install -r requirements.txt` and ensure Poppler + OCRmyPDF binaries exist in `$PATH`.
+2. `python manage_workflow.py init-config workflow.config.json --source-root Y67 --output-root output` (adjust paths as needed).
+3. Dry run on a handful of files: `python manage_workflow.py full-run --config-path workflow.config.json --sample-limit 5`.
+4. Inspect outputs under `output/<company>/<year>/<file>/` (JSON, searchable PDFs, table CSVs). Use these artifacts to complete validation steps 2–4 in the workflow plan.
