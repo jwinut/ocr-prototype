@@ -33,3 +33,26 @@
 2. Benchmark PaddleOCR on the same pages to judge accuracy/speed; decide on CPU vs. GPU hosting.
 3. Prototype table extraction with PP-Structure or pdfplumber on the OCR’d balance sheet.
 4. Script batch processing over all `Y67` folders, capturing output paths, confidences, and logs for future auditing.
+
+## Workflow plan
+1. **Environment setup**
+   - Install Poppler/ImageMagick and OCRmyPDF locally or pull their Docker images.
+   - Fetch PaddleOCR repo/image for CLI + PP-Structure modules; verify GPU drivers if available.
+2. **Sample evaluation**
+   - Pick 2–3 representative PDFs per company type (Balance Sheet, Cash Flow, Compare PL).
+   - Run OCRmyPDF baseline; archive outputs + logs for accuracy review.
+3. **PaddleOCR comparison**
+   - Convert the same sample pages to PNG, execute PaddleOCR CLI with `--lang thai --rec_model_dir ppocr/v4`.
+   - Collect recognition JSON with bounding boxes/confidences; document runtime/resources.
+4. **Select pipeline**
+   - Compare accuracy metrics (manual spot check + confidence). Decide primary OCR engine and fallbacks.
+   - Lock in preprocessing settings (resolution, denoise) and any GPU requirements.
+5. **Table extraction prototype**
+   - Use PP-Structure (table) or pdfplumber on OCR’d pages; map outputs to desired schema (e.g., assets/liabilities columns).
+   - Define normalization scripts for Thai numerals and currency formatting.
+6. **Batch processing script**
+   - Build a Python/Bash pipeline walking `Y67/**/Y*/*.pdf`, applying preprocessing → OCR → table extraction.
+   - Emit per-file artifacts: searchable PDF, plain text, table JSON/CSV, and a log entry with confidence stats.
+7. **Validation & handoff**
+   - Spot-check random samples across companies/years; log issues requiring manual review.
+   - Package documentation (commands, configs, docker-compose) for reproducible deployment; plan next iteration (automation, UI).
