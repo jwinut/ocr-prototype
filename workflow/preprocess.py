@@ -4,14 +4,13 @@ import logging
 from pathlib import Path
 from typing import List
 
-from pdf2image import convert_from_path
-
-
 LOGGER = logging.getLogger(__name__)
 
 
 def pdf_to_images(pdf_path: Path, output_dir: Path, dpi: int = 300) -> List[Path]:
     """Render a PDF into individual page images."""
+    from pdf2image import convert_from_path
+
     output_dir.mkdir(parents=True, exist_ok=True)
     LOGGER.info("Rendering %s -> %s", pdf_path.name, output_dir)
     images = convert_from_path(str(pdf_path), dpi=dpi)

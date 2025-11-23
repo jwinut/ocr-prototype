@@ -5,13 +5,13 @@ import logging
 from pathlib import Path
 from typing import List
 
-import pdfplumber
-
 LOGGER = logging.getLogger(__name__)
 
 
 def extract_tables(pdf_path: Path, output_dir: Path) -> List[Path]:
     """Extract tables with pdfplumber; return CSV paths."""
+    import pdfplumber
+
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_paths: List[Path] = []
     LOGGER.info("Extracting tables from %s", pdf_path.name)
