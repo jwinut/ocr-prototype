@@ -1,0 +1,17 @@
+# Thai Financial Document OCR - GUI Requirements
+# Install with: pip install -r requirements_gui.txt
+
+# Core dependencies
+streamlit>=1.28.0
+pandas>=2.0.0
+
+# Optional but recommended
+numpy>=1.24.0
+pillow>=10.0.0
+
+# For future database integration (DEV-1)
+# sqlalchemy>=2.0.0
+
+# For future OCR integration (DEV-4)
+# paddleocr>=2.7.0
+# opencv-python>=4.8.0

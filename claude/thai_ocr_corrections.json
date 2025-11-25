@@ -1,0 +1,133 @@
+{
+  "generated_at": "2025-11-26T01:49:37.287623",
+  "analysis_summary": {
+    "total_texts_analyzed": 968,
+    "thai_sequences_found": 857,
+    "suspicious_patterns_found": 5,
+    "unknown_words_found": 846
+  },
+  "corrections": [
+    {
+      "error_pattern": "บบ",
+      "correction": "บ",
+      "confidence": 0.95,
+      "frequency": 634,
+      "type": "character_duplication",
+      "description": "Fix duplicated บ character",
+      "example": "บริบบษัท → บริษัท",
+      "priority": "critical"
+    },
+    {
+      "error_pattern": "งบบริษัท",
+      "correction": "งบบริษัท",
+      "confidence": 0.8,
+      "frequency": 170,
+      "type": "word_segmentation",
+      "description": "Financial statement term",
+      "example": "งบบริษัท",
+      "priority": "high"
+    },
+    {
+      "error_pattern": "บจก",
+      "correction": "บจก.",
+      "confidence": 0.85,
+      "frequency": 165,
+      "type": "abbreviation_punctuation",
+      "description": "Add period to company abbreviation",
+      "example": "บจก. (บริษัทจำกัด)",
+      "priority": "high"
+    },
+    {
+      "error_pattern": "กําไร",
+      "correction": "กำไร",
+      "confidence": 0.9,
+      "frequency": 149,
+      "type": "character_correction",
+      "description": "Fix corrupted ำ character",
+      "example": "กำไร",
+      "priority": "high"
+    },
+    {
+      "error_pattern": "สส",
+      "correction": "ส",
+      "confidence": 0.9,
+      "frequency": 75,
+      "type": "character_duplication",
+      "description": "Fix duplicated ส character",
+      "example": "สสมบัติ → สมบัติ",
+      "priority": "high"
+    },
+    {
+      "error_pattern": "จํากั",
+      "correction": "จำกัด",
+      "confidence": 0.9,
+      "frequency": 58,
+      "type": "character_correction",
+      "description": "Fix corrupted ำ character",
+      "example": "จำกัด",
+      "priority": "high"
+    },
+    {
+      "error_pattern": "คํานวณ",
+      "correction": "คำนวณ",
+      "confidence": 0.9,
+      "frequency": 0,
+      "type": "character_correction",
+      "description": "Fix corrupted ำ character",
+      "example": "คำนวณ",
+      "priority": "high"
+    },
+    {
+      "error_pattern": "บ",
+      "correction": "ป",
+      "confidence": 0.7,
+      "frequency": 5291,
+      "type": "character_confusion",
+      "description": "บ/ป character confusion",
+      "example": "บริการ → ประการ (when context fits)",
+      "priority": "medium"
+    },
+    {
+      "error_pattern": "ถ",
+      "correction": "ด",
+      "confidence": 0.75,
+      "frequency": 916,
+      "type": "character_confusion",
+      "description": "ด/ถ character confusion",
+      "example": "มูลค่าถ → มูลค่าด",
+      "priority": "medium"
+    },
+    {
+      "error_pattern": "ปป",
+      "correction": "ป",
+      "confidence": 0.9,
+      "frequency": 2,
+      "type": "character_duplication",
+      "description": "Fix duplicated ป character",
+      "example": "ปประเทศ → ประเทศ",
+      "priority": "medium"
+    },
+    {
+      "error_pattern": "ว",
+      "correction": "ถ",
+      "confidence": 0.65,
+      "frequency": 4793,
+      "type": "character_confusion",
+      "description": "ว/ถ character confusion",
+      "example": "ดำเนินวาน → ดำเนินการ",
+      "priority": "low"
+    }
+  ],
+  "statistics": {
+    "total_corrections": 11,
+    "critical_corrections": 1,
+    "high_priority_corrections": 6,
+    "corrections_by_type": {
+      "character_duplication": 3,
+      "word_segmentation": 1,
+      "abbreviation_punctuation": 1,
+      "character_correction": 3,
+      "character_confusion": 3
+    }
+  }
+}

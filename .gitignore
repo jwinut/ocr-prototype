@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Database files (keep schema, exclude data)
+*.db
+!data/*.sql
+
+# Uploads and temporary files
+uploads/
+*.tmp
+*.temp
+
+# Claude/Serena session files
+.claude/
+.serena/
+
+# Streamlit
+.streamlit/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model files (large binaries)
+models/*.bin
+models/*.pth
+models/*.pt
+models/*.onnx
+
+# Data directory (keep structure, exclude large files)
+data/*.db
+data/*.csv
+data/*.json
+!data/.gitkeep
