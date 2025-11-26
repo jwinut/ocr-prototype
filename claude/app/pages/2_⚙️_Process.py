@@ -150,8 +150,11 @@ def run_parallel_processing(documents: list, workers: int, engines_override: lis
     for current_engine in selected_engines:
         add_log(f"=== Starting engine: {current_engine.upper()} ===", level="info")
 
+        # Force single worker for Typhoon to respect rate limits and Streamlit context
+        effective_workers = 1 if current_engine == "typhoon" else workers
+
         # Create processor per engine run
-        processor = ParallelProcessor(max_workers=workers)
+        processor = ParallelProcessor(max_workers=effective_workers)
         st.session_state.processor = processor  # for cancellation support
 
         # Define check function with engine captured in closure
@@ -295,16 +298,21 @@ def main():
     with col2:
         worker_options = [1, 2, 3]
         current_workers = st.session_state.parallel_workers
-        # Ensure current value is valid
         if current_workers not in worker_options:
             current_workers = 1
-        workers = st.selectbox(
-            "Parallel Workers",
-            options=worker_options,
-            index=worker_options.index(current_workers),
-            help="Number of documents to process simultaneously. Default: 1 (sequential)."
-        )
-        st.session_state.parallel_workers = workers
+        typhoon_only = st.session_state.get('selected_engines', ['docling']) == ['typhoon']
+        if typhoon_only:
+            st.info("Typhoon uses 1 worker due to rate limits.")
+            workers = 1
+            st.session_state.parallel_workers = 1
+        else:
+            workers = st.selectbox(
+                "Parallel Workers",
+                options=worker_options,
+                index=worker_options.index(current_workers),
+                help="Number of documents to process simultaneously. Default: 1 (sequential)."
+            )
+            st.session_state.parallel_workers = workers
 
     with col3:
         # Show time estimate (per-engine total)
@@ -319,14 +327,16 @@ def main():
             avg_time = sum(per_engine_time) / len(per_engine_time)
             estimate = estimate_processing_time(
                 num_documents=total_tasks,
-                max_workers=workers,
+                max_workers=workers if 'typhoon' not in engines_to_run else 1,
                 avg_seconds_per_doc=avg_time
             )
             st.metric(
                 "Est. Time",
                 f"{estimate['parallel_minutes']:.1f} min",
-                delta=f"{estimate['speedup_factor']:.1f}x faster" if workers > 1 else None
+                delta=f"{estimate['speedup_factor']:.1f}x faster" if workers > 1 and 'typhoon' not in engines_to_run else None
             )
+            if 'typhoon' in engines_to_run:
+                st.caption("Typhoon runs sequentially (rate-limited).")
 
     st.markdown("---")
 
@@ -355,10 +365,11 @@ def main():
                 st.session_state.processing_status = "running"
                 st.session_state.processing_logs = []
                 st.session_state.batch_status = None
+                st.session_state.processing_thread = None
                 engines = st.session_state.get('selected_engines', ['docling'])
                 add_log("=== Processing started ===", level="info")
                 add_log(f"Engines: {', '.join([e.upper() for e in engines])}", level="info")
-                add_log(f"Workers: {workers}", level="info")
+                add_log(f"Workers: {workers if 'typhoon' not in engines else 1} (Typhoon forces 1 worker)", level="info")
                 if already_processed > 0:
                     add_log(f"ℹ️ {already_processed} documents will be skipped (already processed for selected engines)", level="info")
                 st.rerun()
@@ -427,14 +438,12 @@ def main():
         else:
             st.info("Initializing...")
 
-    # Kick off processing in a background thread when requested
+    # Kick off processing (in main thread for Typhoon-only, thread otherwise)
     if st.session_state.processing_status == "running" and st.session_state.processing_thread is None:
-        import threading, time
-        from streamlit.runtime.scriptrunner import add_script_run_ctx
-
         engines_snapshot = st.session_state.get('selected_engines', ['docling'])
+        typhoon_only = engines_snapshot == ['typhoon']
 
-        def worker():
+        def do_work():
             final_status = run_parallel_processing(documents=documents, workers=workers, engines_override=engines_snapshot)
             st.session_state.batch_status = final_status
             st.session_state.processing_status = "completed"
@@ -447,10 +456,16 @@ def main():
                 except Exception:
                     pass
 
-        t = threading.Thread(target=worker, daemon=True)
-        add_script_run_ctx(t)
-        st.session_state.processing_thread = t
-        t.start()
+        if typhoon_only:
+            # Run inline to avoid ScriptRunContext issues
+            do_work()
+        else:
+            import threading
+            from streamlit.runtime.scriptrunner import add_script_run_ctx
+            t = threading.Thread(target=do_work, daemon=True)
+            add_script_run_ctx(t)
+            st.session_state.processing_thread = t
+            t.start()
 
     st.markdown("---")
 
