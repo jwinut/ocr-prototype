@@ -441,7 +441,10 @@ def main():
                 st.caption("Processing... updating every second")
                 import time
                 time.sleep(1)
-                st.experimental_rerun()
+                try:
+                    st.rerun()
+                except Exception:
+                    pass
         else:
             st.info("Initializing...")
 
