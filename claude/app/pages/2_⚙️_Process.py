@@ -410,6 +410,11 @@ def main():
         st.subheader("📊 Progress")
         sync_logs_from_processor()
 
+        # Ensure we always have a status object while running (survives reruns)
+        if st.session_state.batch_status is None and documents:
+            st.session_state.batch_status = BatchStatus(total=len(documents))
+            st.session_state.batch_status.is_running = True
+
         status = st.session_state.batch_status
         if status:
             progress = status.completed / status.total if status.total > 0 else 0
