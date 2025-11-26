@@ -64,6 +64,7 @@ def main():
 
     # Load companies and years from DB
     companies = db.get_all_companies()
+    company_map = {c.company_code: c for c in companies}
     company_options = [f"{c.company_code} - {c.name_th or c.name_en or 'Unknown'}" for c in companies]
     company_options.append("➕ New company")
 
@@ -208,7 +209,15 @@ def main():
                             )
                         else:
                             company_code = selected_company.split(" - ")[0]
-                            company = db.get_or_create_company(company_code=company_code, name_th=None)
+                            existing = company_map.get(company_code)
+                            if not existing:
+                                st.error(f"Company {company_code} not found in database.")
+                                break
+                            company = db.get_or_create_company(
+                                company_code=existing.company_code,
+                                name_th=existing.name_th,
+                                name_en=existing.name_en
+                            )
 
                         fiscal_year = db.get_or_create_fiscal_year(company_id=company.id, year_be=int(selected_year))
 
