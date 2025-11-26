@@ -442,6 +442,11 @@ def main():
     if st.session_state.processing_status == "running" and st.session_state.processing_thread is None:
         engines_snapshot = st.session_state.get('selected_engines', ['docling'])
 
+        # Initialize a visible batch status so UI isn't stuck at "Initializing"
+        if documents:
+            st.session_state.batch_status = BatchStatus(total=len(documents))
+            st.session_state.batch_status.is_running = True
+
         def do_work():
             final_status = run_parallel_processing(documents=documents, workers=workers, engines_override=engines_snapshot)
             st.session_state.batch_status = final_status
