@@ -44,6 +44,9 @@ def get_thread_processor(engine: str = "docling", languages: tuple = ("th", "en"
     if engine == "typhoon":
         from processing.ocr_typhoon import TyphoonDocumentProcessor
         _thread_local.processors[engine] = TyphoonDocumentProcessor(languages=languages)
+    elif engine == "pdfplumber":
+        from processing.ocr_pdfplumber import PdfPlumberDocumentProcessor
+        _thread_local.processors[engine] = PdfPlumberDocumentProcessor(languages=languages)
     else:
         from processing.ocr import DocumentProcessor
         _thread_local.processors[engine] = DocumentProcessor(languages=languages)

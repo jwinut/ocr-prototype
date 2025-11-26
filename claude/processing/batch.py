@@ -16,7 +16,7 @@ def get_processor(engine: str = "docling", languages: tuple = ("th", "en"), **kw
     Factory function to get the appropriate OCR processor.
 
     Args:
-        engine: OCR engine to use ("docling" or "typhoon")
+        engine: OCR engine to use ("docling", "typhoon", or "pdfplumber")
         languages: Language codes for OCR
         **kwargs: Additional engine-specific parameters
 
@@ -30,6 +30,9 @@ def get_processor(engine: str = "docling", languages: tuple = ("th", "en"), **kw
             rate_limit_delay=kwargs.get('rate_limit_delay', 3.0),
             convert_tables_to_df=kwargs.get('convert_tables_to_df', True),
         )
+    if engine == "pdfplumber":
+        from .ocr_pdfplumber import PdfPlumberDocumentProcessor
+        return PdfPlumberDocumentProcessor(languages=languages)
     else:
         # Default to Docling
         return DocumentProcessor(

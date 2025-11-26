@@ -282,12 +282,15 @@ def main():
         st.markdown("**OCR Engines**")
         docling_checked = st.checkbox("🔧 Docling (Local)", value="docling" in st.session_state.selected_engines)
         typhoon_checked = st.checkbox("🌊 Typhoon (Cloud API)", value="typhoon" in st.session_state.selected_engines)
+        pdfplumber_checked = st.checkbox("📄 PDFPlumber (Text/Table)", value="pdfplumber" in st.session_state.selected_engines)
 
         new_engines = []
         if docling_checked:
             new_engines.append("docling")
         if typhoon_checked:
             new_engines.append("typhoon")
+        if pdfplumber_checked:
+            new_engines.append("pdfplumber")
 
         if not new_engines:
             st.warning("Select at least one engine.")
@@ -300,7 +303,9 @@ def main():
         current_workers = st.session_state.parallel_workers
         if current_workers not in worker_options:
             current_workers = 1
-        typhoon_only = st.session_state.get('selected_engines', ['docling']) == ['typhoon']
+        selected_engines = st.session_state.get('selected_engines', ['docling'])
+        typhoon_only = selected_engines == ['typhoon']
+        typhoon_selected = 'typhoon' in selected_engines
         if typhoon_only:
             st.info("Typhoon uses 1 worker due to rate limits.")
             workers = 1
@@ -312,6 +317,8 @@ def main():
                 index=worker_options.index(current_workers),
                 help="Number of documents to process simultaneously. Default: 1 (sequential)."
             )
+            if typhoon_selected:
+                st.caption("Typhoon will still run with 1 worker; others use the selected value.")
             st.session_state.parallel_workers = workers
 
     with col3:

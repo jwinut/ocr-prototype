@@ -34,8 +34,8 @@ class Config:
     TABLE_MODE: str = "ACCURATE"  # PaddleOCR table mode
 
     # OCR Engine Selection
-    OCR_ENGINE: str = "docling"  # "docling" or "typhoon"
-    OCR_ENGINES_AVAILABLE: Tuple[str, ...] = ("docling", "typhoon")
+    OCR_ENGINE: str = "docling"  # "docling", "typhoon", or "pdfplumber"
+    OCR_ENGINES_AVAILABLE: Tuple[str, ...] = ("docling", "typhoon", "pdfplumber")
 
     # Typhoon OCR Settings
     TYPHOON_RATE_LIMIT_DELAY: float = 3.0  # seconds between API calls
