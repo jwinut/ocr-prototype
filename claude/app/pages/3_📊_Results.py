@@ -458,7 +458,8 @@ def main():
             st.subheader("🔄 OCR Engine Version")
             engine_labels = {
                 "docling": "🔧 Docling (Local)",
-                "typhoon": "🌊 Typhoon (Cloud API)"
+                "typhoon": "🌊 Typhoon (Cloud API)",
+                "pdfplumber": "📄 PDFPlumber (Text/Table)"
             }
             col_eng1, col_eng2 = st.columns([2, 3])
             with col_eng1:
@@ -475,7 +476,11 @@ def main():
             st.markdown("---")
         elif len(available_engines) == 1:
             st.session_state.view_engine = available_engines[0]
-            engine_labels = {"docling": "🔧 Docling", "typhoon": "🌊 Typhoon"}
+            engine_labels = {
+                "docling": "🔧 Docling",
+                "typhoon": "🌊 Typhoon",
+                "pdfplumber": "📄 PDFPlumber"
+            }
             st.caption(f"Engine: {engine_labels.get(available_engines[0], available_engines[0])}")
         else:
             # No cached results - will fall back to re-processing
