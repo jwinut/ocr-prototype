@@ -438,13 +438,7 @@ def main():
                 st.metric("⏱️ Time", f"{elapsed:.1f}s")
 
             if status.is_running:
-                st.caption("Processing... updating every second")
-                import time
-                time.sleep(1)
-                try:
-                    st.rerun()
-                except Exception:
-                    pass
+                st.caption("Processing... refresh to update progress")
         else:
             st.info("Initializing...")
 
