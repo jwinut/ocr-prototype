@@ -320,7 +320,10 @@ class ParallelProcessor:
                 break
 
             doc_id = doc.get('id', '')
-            file_path = doc.get('file_path', '')
+            file_path = doc.get('file_path')
+            if not file_path:
+                add_log_message(f"❌ Skipping doc {doc_id} (no file path)", "error")
+                continue
 
             self.status.current_files = [os.path.basename(file_path)]
 
@@ -355,10 +358,15 @@ class ParallelProcessor:
                     if self._cancel_flag:
                         break
 
+                    file_path = doc.get('file_path')
+                    if not file_path:
+                        add_log_message(f"❌ Skipping doc {doc.get('id', '')} (no file path)", "error")
+                        continue
+
                     future = executor.submit(
                         process_single_document,
                         doc_id=doc.get('id', ''),
-                        file_path=doc.get('file_path', ''),
+                        file_path=file_path,
                         engine=engine,
                         check_processed_fn=check_processed_fn,
                         save_full_results_fn=save_full_results_fn

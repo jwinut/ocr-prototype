@@ -630,23 +630,23 @@ def main():
                     if page_count > 1:
                         col_prev, col_label, col_next = st.columns([1, 2, 1])
                         page_state_key = f"{selected_doc['id']}_typhoon_page"
-                        page_input_key = f"{selected_doc['id']}_typhoon_page_input"
                         page_idx = st.session_state.get(page_state_key, 1)
                         page_idx = max(1, min(page_idx, page_count))
                         with col_prev:
                             if st.button("◀", key=f"prev_typhoon_{selected_doc['id']}", use_container_width=True) and page_idx > 1:
                                 page_idx -= 1
                         with col_label:
-                            page_idx = st.number_input(
+                            st.markdown(f"<div style='text-align:center; font-weight:600;'>Page {page_idx} of {page_count}</div>", unsafe_allow_html=True)
+                            page_input = st.text_input(
                                 "Page",
-                                min_value=1,
-                                max_value=page_count,
-                                value=page_idx,
-                                step=1,
-                                key=page_input_key,
+                                value=str(page_idx),
+                                key=f"{selected_doc['id']}_typhoon_page_input",
                                 label_visibility="collapsed"
                             )
-                            st.markdown(f"<div style='text-align:center;'>Page {int(page_idx)} of {page_count}</div>", unsafe_allow_html=True)
+                            try:
+                                page_idx = int(page_input)
+                            except ValueError:
+                                pass
                         with col_next:
                             if st.button("▶", key=f"next_typhoon_{selected_doc['id']}", use_container_width=True) and page_idx < page_count:
                                 page_idx += 1
@@ -723,23 +723,23 @@ def main():
                     if page_count > 1:
                         col_prev, col_label, col_next = st.columns([1, 2, 1])
                         page_state_key = f"{selected_doc['id']}_docling_page"
-                        page_input_key = f"{selected_doc['id']}_docling_page_input"
                         page_idx = st.session_state.get(page_state_key, 1)
                         page_idx = max(1, min(page_idx, page_count))
                         with col_prev:
                             if st.button("◀", key=f"prev_docling_{selected_doc['id']}", use_container_width=True) and page_idx > 1:
                                 page_idx -= 1
                         with col_label:
-                            page_idx = st.number_input(
+                            st.markdown(f"<div style='text-align:center; font-weight:600;'>Page {page_idx} of {page_count}</div>", unsafe_allow_html=True)
+                            page_input = st.text_input(
                                 "Page",
-                                min_value=1,
-                                max_value=page_count,
-                                value=page_idx,
-                                step=1,
-                                key=page_input_key,
+                                value=str(page_idx),
+                                key=f"{selected_doc['id']}_docling_page_input",
                                 label_visibility="collapsed"
                             )
-                            st.markdown(f"<div style='text-align:center;'>Page {int(page_idx)} of {page_count}</div>", unsafe_allow_html=True)
+                            try:
+                                page_idx = int(page_input)
+                            except ValueError:
+                                pass
                         with col_next:
                             if st.button("▶", key=f"next_docling_{selected_doc['id']}", use_container_width=True) and page_idx < page_count:
                                 page_idx += 1
