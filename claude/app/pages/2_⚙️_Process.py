@@ -405,8 +405,13 @@ def main():
         for doc_id in st.session_state.selected_files
     ]
 
-    # If processing is running, show live progress (polling)
-    if st.session_state.processing_status == "running":
+    # Show live/last-known progress while a run is active
+    is_running = (
+        st.session_state.processing_status == "running"
+        or (st.session_state.batch_status and st.session_state.batch_status.is_running)
+        or (st.session_state.processing_thread is not None)
+    )
+    if is_running:
         st.subheader("📊 Progress")
         sync_logs_from_processor()
 
