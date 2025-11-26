@@ -438,8 +438,7 @@ def main():
                 st.metric("⏱️ Time", f"{elapsed:.1f}s")
 
             if status.is_running:
-                st.caption("Processing... (auto-refreshing every 2s)")
-                st.autorefresh(interval=2000, limit=None, key="process_autorefresh")
+                st.caption("Processing... (click refresh or wait for updates)")
         else:
             st.info("Initializing...")
 
