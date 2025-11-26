@@ -412,79 +412,33 @@ def main():
         for doc_id in st.session_state.selected_files
     ]
 
-    # Show live/last-known progress while a run is active
-    is_running = (
-        st.session_state.processing_status == "running"
-        or (st.session_state.batch_status and st.session_state.batch_status.is_running)
-        or (st.session_state.processing_thread is not None)
-    )
-    if is_running:
+    # Kick off processing and show static "in progress" message
+    if st.session_state.processing_status == "running":
         st.subheader("📊 Progress")
-        sync_logs_from_processor()
+        st.info("Processing... this page will update when complete.")
 
-        # Ensure we always have a status object while running (survives reruns)
-        if st.session_state.batch_status is None and documents:
-            st.session_state.batch_status = BatchStatus(total=len(documents))
-            st.session_state.batch_status.is_running = True
+        if st.session_state.processing_thread is None:
+            engines_snapshot = st.session_state.get('selected_engines', ['docling'])
 
-        status = st.session_state.batch_status
-        if status:
-            progress = status.completed / status.total if status.total > 0 else 0
-            st.progress(progress)
+            def do_work():
+                final_status = run_parallel_processing(documents=documents, workers=workers, engines_override=engines_snapshot)
+                st.session_state.batch_status = final_status
+                st.session_state.processing_status = "completed"
+                # Auto-save on completion
+                db = get_db()
+                if db:
+                    try:
+                        count = db.save_session_state(st.session_state.processed_documents)
+                        add_log(f"💾 Auto-saved {count} documents to database", level="info")
+                    except Exception:
+                        pass
 
-            # Statistics
-            st.markdown("---")
-            st.subheader("📈 Processing Statistics")
-
-            col1, col2, col3, col4, col5 = st.columns(5)
-            with col1:
-                st.metric("Total", status.total)
-            with col2:
-                st.metric("✅ Successful", status.successful)
-            with col3:
-                st.metric("❌ Failed", status.failed)
-            with col4:
-                st.metric("⏭️ Skipped", status.skipped)
-            with col5:
-                elapsed = status.elapsed_seconds
-                st.metric("⏱️ Time", f"{elapsed:.1f}s")
-
-            if status.is_running:
-                st.caption("Processing... refreshing shortly to update progress")
-                import time
-                time.sleep(1)
-                st.rerun()
-        else:
-            st.info("Initializing...")
-
-    # Kick off processing (in main thread for Typhoon-only, thread otherwise)
-    if st.session_state.processing_status == "running" and st.session_state.processing_thread is None:
-        engines_snapshot = st.session_state.get('selected_engines', ['docling'])
-
-        # Initialize a visible batch status so UI isn't stuck at "Initializing"
-        if documents:
-            st.session_state.batch_status = BatchStatus(total=len(documents))
-            st.session_state.batch_status.is_running = True
-
-        def do_work():
-            final_status = run_parallel_processing(documents=documents, workers=workers, engines_override=engines_snapshot)
-            st.session_state.batch_status = final_status
-            st.session_state.processing_status = "completed"
-            # Auto-save on completion
-            db = get_db()
-            if db:
-                try:
-                    count = db.save_session_state(st.session_state.processed_documents)
-                    add_log(f"💾 Auto-saved {count} documents to database", level="info")
-                except Exception:
-                    pass
-
-        import threading
-        from streamlit.runtime.scriptrunner import add_script_run_ctx
-        t = threading.Thread(target=do_work, daemon=True)
-        add_script_run_ctx(t)
-        st.session_state.processing_thread = t
-        t.start()
+            import threading
+            from streamlit.runtime.scriptrunner import add_script_run_ctx
+            t = threading.Thread(target=do_work, daemon=True)
+            add_script_run_ctx(t)
+            st.session_state.processing_thread = t
+            t.start()
 
     st.markdown("---")
 
