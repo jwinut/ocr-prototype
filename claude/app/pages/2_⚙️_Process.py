@@ -433,15 +433,14 @@ def main():
                 st.metric("⏱️ Time", f"{elapsed:.1f}s")
 
             if status.is_running:
-                st.caption("Processing... (updates every few seconds)")
-                st.experimental_rerun()
+                st.caption("Processing... (auto-refreshing every 2s)")
+                st.autorefresh(interval=2000, limit=None, key="process_autorefresh")
         else:
             st.info("Initializing...")
 
     # Kick off processing (in main thread for Typhoon-only, thread otherwise)
     if st.session_state.processing_status == "running" and st.session_state.processing_thread is None:
         engines_snapshot = st.session_state.get('selected_engines', ['docling'])
-        typhoon_only = engines_snapshot == ['typhoon']
 
         def do_work():
             final_status = run_parallel_processing(documents=documents, workers=workers, engines_override=engines_snapshot)
@@ -456,16 +455,12 @@ def main():
                 except Exception:
                     pass
 
-        if typhoon_only:
-            # Run inline to avoid ScriptRunContext issues
-            do_work()
-        else:
-            import threading
-            from streamlit.runtime.scriptrunner import add_script_run_ctx
-            t = threading.Thread(target=do_work, daemon=True)
-            add_script_run_ctx(t)
-            st.session_state.processing_thread = t
-            t.start()
+        import threading
+        from streamlit.runtime.scriptrunner import add_script_run_ctx
+        t = threading.Thread(target=do_work, daemon=True)
+        add_script_run_ctx(t)
+        st.session_state.processing_thread = t
+        t.start()
 
     st.markdown("---")
 
