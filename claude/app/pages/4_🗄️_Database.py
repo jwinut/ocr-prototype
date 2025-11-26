@@ -1,8 +1,7 @@
 """
 Database Management Page
 
-View and manage cached processed documents, clear state, and perform
-database maintenance operations.
+View and manage processed documents and database state.
 """
 
 import streamlit as st
@@ -59,7 +58,7 @@ def main():
     """Database management page."""
 
     st.title("🗄️ Database Management")
-    st.markdown("Manage cached documents and database state")
+    st.markdown("Manage processed documents and database state")
 
     if not MODULES_AVAILABLE:
         st.error(f"Required modules not available: {import_error}")
@@ -75,13 +74,21 @@ def main():
     # Database Statistics
     st.subheader("📊 Database Statistics")
 
-    cached_docs = db.get_all_cached_documents()
+    # Get all processed documents (replaces get_all_cached_documents)
+    processed_docs = db.get_processed_documents()
     valid_count = 0
     invalid_count = 0
     total_size = 0
 
-    for doc in cached_docs:
-        is_valid, _ = db.is_document_processed(doc.file_path)
+    # Group by engine for display
+    engines = {}
+    for doc in processed_docs:
+        engine = doc.engine or "unknown"
+        if engine not in engines:
+            engines[engine] = 0
+        engines[engine] += 1
+
+        is_valid, _ = db.is_document_processed(doc.file_path, engine=doc.engine)
         if is_valid:
             valid_count += 1
         else:
@@ -91,13 +98,17 @@ def main():
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Cached", len(cached_docs))
+        st.metric("Total Processed", len(processed_docs))
     with col2:
         st.metric("✅ Valid", valid_count)
     with col3:
         st.metric("⚠️ Invalid", invalid_count)
     with col4:
         st.metric("📦 Total Size", format_file_size(total_size))
+
+    # Show engine breakdown
+    if engines:
+        st.caption(f"By engine: {', '.join([f'{k}: {v}' for k, v in engines.items()])}")
 
     st.markdown("---")
 
@@ -122,10 +133,10 @@ def main():
     with col3:
         if st.button("🧹 Clear Invalid", use_container_width=True, type="secondary"):
             removed = 0
-            for doc in cached_docs:
-                is_valid, _ = db.is_document_processed(doc.file_path)
+            for doc in processed_docs:
+                is_valid, _ = db.is_document_processed(doc.file_path, engine=doc.engine)
                 if not is_valid:
-                    db.invalidate_cache(doc.file_path)
+                    db.delete_document(doc.id)
                     removed += 1
             if removed > 0:
                 st.success(f"Removed {removed} invalid entries")
@@ -139,15 +150,16 @@ def main():
             st.session_state.confirm_clear_all = False
 
         if st.session_state.confirm_clear_all:
-            st.warning("Are you sure?")
+            st.warning("Are you sure? This will delete ALL documents from the database.")
             col_yes, col_no = st.columns(2)
             with col_yes:
                 if st.button("Yes, Clear All", type="primary", use_container_width=True):
-                    count = db.clear_cache()
+                    # Delete all processed documents using efficient bulk delete
+                    count = db.clear_all_documents()
                     # Also clear session state
                     st.session_state.processed_documents = []
                     st.session_state.confirm_clear_all = False
-                    st.success(f"Cleared {count} cached documents!")
+                    st.success(f"Cleared {count} documents from database!")
                     st.rerun()
             with col_no:
                 if st.button("Cancel", use_container_width=True):
@@ -160,35 +172,44 @@ def main():
 
     st.markdown("---")
 
-    # Cached Documents Table
-    st.subheader("📋 Cached Documents")
+    # Processed Documents Table
+    st.subheader("📋 Processed Documents")
 
-    if not cached_docs:
-        st.info("No cached documents. Process some documents to see them here.")
+    if not processed_docs:
+        st.info("No processed documents. Process some documents to see them here.")
     else:
         # Filter options
-        col1, col2 = st.columns([1, 3])
+        col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             filter_status = st.selectbox(
                 "Filter by Status",
                 ["All", "Valid Only", "Invalid Only"]
             )
+        with col2:
+            engine_options = ["All"] + list(engines.keys())
+            filter_engine = st.selectbox(
+                "Filter by Engine",
+                engine_options
+            )
 
         # Build table data
         table_data = []
-        for doc in cached_docs:
-            is_valid, reason = db.is_document_processed(doc.file_path)
+        for doc in processed_docs:
+            is_valid, reason = db.is_document_processed(doc.file_path, engine=doc.engine)
 
-            # Apply filter
+            # Apply filters
             if filter_status == "Valid Only" and not is_valid:
                 continue
             if filter_status == "Invalid Only" and is_valid:
+                continue
+            if filter_engine != "All" and doc.engine != filter_engine:
                 continue
 
             table_data.append({
                 "id": doc.id,
                 "file_path": doc.file_path,
                 "filename": doc.file_name,
+                "engine": doc.engine or "unknown",
                 "status": "✅ Valid" if is_valid else f"⚠️ {reason}",
                 "tables": doc.tables_found or 0,
                 "text_blocks": doc.text_blocks or 0,
@@ -198,7 +219,7 @@ def main():
             })
 
         if not table_data:
-            st.info(f"No documents match the filter '{filter_status}'")
+            st.info(f"No documents match the current filters")
         else:
             # Display as expandable list for better control
             st.caption(f"Showing {len(table_data)} documents")
@@ -221,7 +242,7 @@ def main():
             # Display documents
             for doc in table_data:
                 with st.container():
-                    col1, col2, col3, col4, col5 = st.columns([0.5, 3, 1, 1, 1])
+                    col1, col2, col3, col4, col5, col6 = st.columns([0.5, 2.5, 1, 1, 1, 1])
 
                     with col1:
                         is_selected = st.checkbox(
@@ -240,12 +261,16 @@ def main():
                         st.caption(doc["file_path"])
 
                     with col3:
-                        st.text(doc["status"])
+                        engine_icon = "🔧" if doc["engine"] == "docling" else "🌊"
+                        st.text(f"{engine_icon} {doc['engine']}")
 
                     with col4:
-                        st.text(f"📊 {doc['tables']} tables")
+                        st.text(doc["status"])
 
                     with col5:
+                        st.text(f"📊 {doc['tables']} tables")
+
+                    with col6:
                         st.text(doc["processed_at"])
 
                     st.divider()
@@ -257,21 +282,18 @@ def main():
                 if st.button(f"🗑️ Delete Selected ({len(st.session_state.selected_for_delete)})", type="primary"):
                     deleted = 0
                     for doc_id in st.session_state.selected_for_delete:
-                        # Find the document and remove it
-                        for doc in table_data:
-                            if doc["id"] == doc_id:
-                                db.invalidate_cache(doc["file_path"])
-                                deleted += 1
-                                break
+                        if db.delete_document(doc_id):
+                            deleted += 1
 
                     # Also remove from session state if present
                     if 'processed_documents' in st.session_state:
+                        deleted_file_paths = [
+                            doc["file_path"] for doc in table_data
+                            if doc["id"] in st.session_state.selected_for_delete
+                        ]
                         st.session_state.processed_documents = [
                             d for d in st.session_state.processed_documents
-                            if d.get('file_path') not in [
-                                doc["file_path"] for doc in table_data
-                                if doc["id"] in st.session_state.selected_for_delete
-                            ]
+                            if d.get('file_path') not in deleted_file_paths
                         ]
 
                     st.session_state.selected_for_delete = []

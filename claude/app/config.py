@@ -33,6 +33,14 @@ class Config:
     OCR_CONFIDENCE_THRESHOLD: float = 0.5
     TABLE_MODE: str = "ACCURATE"  # PaddleOCR table mode
 
+    # OCR Engine Selection
+    OCR_ENGINE: str = "docling"  # "docling" or "typhoon"
+    OCR_ENGINES_AVAILABLE: Tuple[str, ...] = ("docling", "typhoon")
+
+    # Typhoon OCR Settings
+    TYPHOON_RATE_LIMIT_DELAY: float = 3.0  # seconds between API calls
+    TYPHOON_CONVERT_TABLES: bool = True  # Convert HTML tables to DataFrames
+
     # Processing Configuration
     MAX_BATCH_SIZE: int = 10
     PROCESSING_TIMEOUT: int = 300  # seconds

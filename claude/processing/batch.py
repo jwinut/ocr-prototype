@@ -9,6 +9,34 @@ from pathlib import Path
 from typing import Callable, Generator, List, Optional
 
 from .ocr import DocumentProcessor, ProcessedDocument
+
+# Engine factory function
+def get_processor(engine: str = "docling", languages: tuple = ("th", "en"), **kwargs):
+    """
+    Factory function to get the appropriate OCR processor.
+
+    Args:
+        engine: OCR engine to use ("docling" or "typhoon")
+        languages: Language codes for OCR
+        **kwargs: Additional engine-specific parameters
+
+    Returns:
+        DocumentProcessor or TyphoonDocumentProcessor instance
+    """
+    if engine == "typhoon":
+        from .ocr_typhoon import TyphoonDocumentProcessor
+        return TyphoonDocumentProcessor(
+            languages=languages,
+            rate_limit_delay=kwargs.get('rate_limit_delay', 3.0),
+            convert_tables_to_df=kwargs.get('convert_tables_to_df', True),
+        )
+    else:
+        # Default to Docling
+        return DocumentProcessor(
+            languages=languages,
+            table_mode=kwargs.get('table_mode', 'ACCURATE'),
+            gpu=kwargs.get('gpu', False),
+        )
 from .scanner import DocumentInfo, scan_directory
 
 
@@ -61,19 +89,29 @@ class BatchProcessor:
     Batch document processor with progress tracking.
 
     Handles parallel processing with error recovery and progress callbacks.
+    Supports multiple OCR engines (Docling, Typhoon).
     """
 
-    def __init__(self, max_workers: int = 1, languages: tuple = ("th", "en")):
+    def __init__(
+        self,
+        max_workers: int = 1,
+        languages: tuple = ("th", "en"),
+        engine: str = "docling",
+        **engine_kwargs
+    ):
         """
         Initialize batch processor.
 
         Args:
             max_workers: Number of parallel workers (default: 1 for sequential)
             languages: OCR languages for DocumentProcessor
+            engine: OCR engine to use ("docling" or "typhoon")
+            **engine_kwargs: Additional engine-specific parameters
         """
         self.max_workers = max_workers
         self.languages = languages
-        self.processor = DocumentProcessor(languages=languages)
+        self.engine = engine
+        self.processor = get_processor(engine=engine, languages=languages, **engine_kwargs)
         self.current_progress: Optional[BatchProgress] = None
 
     def process_directory(

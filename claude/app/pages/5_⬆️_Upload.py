@@ -280,7 +280,7 @@ def main():
 
     with col1:
         if st.button("← Back to Dashboard", use_container_width=True):
-            st.switch_page("app/main.py")
+            st.switch_page("main.py")
 
     with col2:
         if st.button("Browse Documents", use_container_width=True):

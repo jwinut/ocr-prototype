@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import config
 from models.schema import (
     Base, Company, FiscalYear, Document, ExtractedTable, TableCell,
-    DocumentStatus, DataType, ProcessedDocumentCache
+    DocumentStatus, DataType
 )
 
 
@@ -235,18 +235,29 @@ class DatabaseManager:
         with self.get_session() as session:
             return session.get(Document, document_id)
 
-    def get_document_by_file_path(self, file_path: str) -> Optional[Document]:
+    def get_document_by_file_path(
+        self,
+        file_path: str,
+        engine: Optional[str] = None
+    ) -> Optional[Document]:
         """
-        Get document by file path.
+        Get document by file path, optionally filtered by engine.
 
         Args:
             file_path: Full path to the document file
+            engine: OCR engine name (docling/typhoon). If None, returns first match.
 
         Returns:
             Document instance if found, None otherwise
         """
         with self.get_session() as session:
-            stmt = select(Document).where(Document.file_path == file_path)
+            if engine:
+                stmt = select(Document).where(
+                    Document.file_path == file_path,
+                    Document.engine == engine
+                )
+            else:
+                stmt = select(Document).where(Document.file_path == file_path)
             return session.scalar(stmt)
 
     def get_documents_by_status(
@@ -597,6 +608,26 @@ class DatabaseManager:
             session.commit()
             return True
 
+    def clear_all_documents(self) -> int:
+        """
+        Delete ALL documents from the database.
+
+        This is a destructive operation that clears all processed documents,
+        extracted tables, and related data. Use with caution.
+
+        Returns:
+            Number of documents deleted
+        """
+        with self.get_session() as session:
+            # Count documents first
+            count = session.query(Document).count()
+
+            # Delete all documents (cascades to related tables)
+            session.execute(delete(Document))
+            session.commit()
+
+            return count
+
     def cleanup_failed_documents(self, older_than_days: int = 7) -> int:
         """
         Delete failed documents older than specified days.
@@ -628,7 +659,7 @@ class DatabaseManager:
             session.commit()
             return count
 
-    # Processed Document Cache Operations
+    # Document Processing Operations (Simplified - No Cache Layer)
 
     @staticmethod
     def compute_file_hash(file_path: str) -> str:
@@ -666,101 +697,27 @@ class DatabaseManager:
             "file_modified_at": datetime.fromtimestamp(stat.st_mtime)
         }
 
-    def save_processed_document(
+    def is_document_processed(
         self,
         file_path: str,
-        file_name: str,
-        status: str,
-        tables_found: int = 0,
-        text_blocks: int = 0,
-        result_json: Optional[str] = None
-    ) -> ProcessedDocumentCache:
+        engine: str = "docling"
+    ) -> Tuple[bool, Optional[str]]:
         """
-        Save processed document to cache for persistence across restarts.
-
-        Args:
-            file_path: Full path to the processed file
-            file_name: Original filename
-            status: Processing status (success/failed)
-            tables_found: Number of tables extracted
-            text_blocks: Number of text blocks extracted
-            result_json: JSON string of extracted data
-
-        Returns:
-            ProcessedDocumentCache instance
-        """
-        file_info = self.get_file_info(file_path)
-
-        with self.get_session() as session:
-            # Check if already exists
-            stmt = select(ProcessedDocumentCache).where(
-                ProcessedDocumentCache.file_path == file_path
-            )
-            existing = session.scalar(stmt)
-
-            if existing:
-                # Update existing record
-                existing.file_hash = file_info["file_hash"]
-                existing.file_size_bytes = file_info["file_size_bytes"]
-                existing.file_modified_at = file_info["file_modified_at"]
-                existing.status = status
-                existing.tables_found = tables_found
-                existing.text_blocks = text_blocks
-                existing.result_json = result_json
-                existing.processed_at = datetime.utcnow()
-                session.commit()
-                session.refresh(existing)
-                return existing
-
-            # Create new record
-            cache_entry = ProcessedDocumentCache(
-                file_path=file_path,
-                file_name=file_name,
-                file_hash=file_info["file_hash"],
-                file_size_bytes=file_info["file_size_bytes"],
-                file_modified_at=file_info["file_modified_at"],
-                status=status,
-                tables_found=tables_found,
-                text_blocks=text_blocks,
-                result_json=result_json,
-                processed_at=datetime.utcnow()
-            )
-            session.add(cache_entry)
-            session.commit()
-            session.refresh(cache_entry)
-            return cache_entry
-
-    def get_cached_document(self, file_path: str) -> Optional[ProcessedDocumentCache]:
-        """
-        Get cached processing result for a document.
-
-        Args:
-            file_path: Path to the document file
-
-        Returns:
-            ProcessedDocumentCache if found, None otherwise
-        """
-        with self.get_session() as session:
-            stmt = select(ProcessedDocumentCache).where(
-                ProcessedDocumentCache.file_path == file_path
-            )
-            return session.scalar(stmt)
-
-    def is_document_processed(self, file_path: str) -> Tuple[bool, Optional[str]]:
-        """
-        Check if a document is already processed and still valid.
+        Check if a document is already processed and still valid for a specific engine.
 
         A document is considered valid if:
-        1. It exists in the cache
-        2. The file hash matches (file hasn't been modified)
+        1. It exists in the documents table for the specified engine
+        2. Status is COMPLETED
+        3. The file hash matches (file hasn't been modified)
 
         Args:
             file_path: Path to the document file
+            engine: OCR engine to check (required - must be specific)
 
         Returns:
             Tuple of (is_processed, status_reason)
             - (True, 'valid') - Processed and unchanged
-            - (False, 'not_found') - Never processed
+            - (False, 'not_found') - Never processed by this engine
             - (False, 'file_changed') - Was processed but file modified
             - (False, 'file_missing') - File doesn't exist
         """
@@ -768,98 +725,121 @@ class DatabaseManager:
         if not os.path.exists(file_path):
             return False, 'file_missing'
 
-        cached = self.get_cached_document(file_path)
-
-        if cached is None:
-            return False, 'not_found'
-
-        # Compute current file hash
-        try:
-            current_hash = self.compute_file_hash(file_path)
-        except Exception:
-            return False, 'file_missing'
-
-        # Compare hashes
-        if cached.file_hash != current_hash:
-            return False, 'file_changed'
-
-        return True, 'valid'
-
-    def get_all_cached_documents(self) -> List[ProcessedDocumentCache]:
-        """
-        Get all cached processed documents.
-
-        Returns:
-            List of ProcessedDocumentCache instances
-        """
         with self.get_session() as session:
-            stmt = select(ProcessedDocumentCache).order_by(
-                ProcessedDocumentCache.processed_at.desc()
+            # Query documents table for this specific file_path + engine combo
+            stmt = select(Document).where(
+                and_(
+                    Document.file_path == file_path,
+                    Document.engine == engine,
+                    Document.status == DocumentStatus.COMPLETED
+                )
             )
-            return list(session.scalars(stmt).all())
+            document = session.scalar(stmt)
 
-    def get_processed_file_paths(self) -> Dict[str, Dict[str, Any]]:
+            if document is None:
+                return False, 'not_found'
+
+            # Compute current file hash
+            try:
+                current_hash = self.compute_file_hash(file_path)
+            except Exception:
+                return False, 'file_missing'
+
+            # Compare hashes
+            if document.file_hash != current_hash:
+                return False, 'file_changed'
+
+            return True, 'valid'
+
+    def get_available_engines_for_document(self, file_path: str) -> List[str]:
         """
-        Get all processed file paths with their status and validity.
-
-        Returns:
-            Dict mapping file_path to status info
-        """
-        cached = self.get_all_cached_documents()
-        result = {}
-
-        for doc in cached:
-            is_valid, reason = self.is_document_processed(doc.file_path)
-            result[doc.file_path] = {
-                'status': doc.status,
-                'tables_found': doc.tables_found,
-                'text_blocks': doc.text_blocks,
-                'processed_at': doc.processed_at,
-                'is_valid': is_valid,
-                'validity_reason': reason
-            }
-
-        return result
-
-    def invalidate_cache(self, file_path: str) -> bool:
-        """
-        Remove a document from the cache.
+        Get list of engines that have processed a document.
 
         Args:
             file_path: Path to the document file
 
         Returns:
-            True if removed, False if not found
+            List of engine names (e.g., ['docling', 'typhoon'])
         """
         with self.get_session() as session:
-            stmt = delete(ProcessedDocumentCache).where(
-                ProcessedDocumentCache.file_path == file_path
-            )
-            result = session.execute(stmt)
-            session.commit()
-            return result.rowcount > 0
+            stmt = select(Document.engine).where(
+                and_(
+                    Document.file_path == file_path,
+                    Document.status == DocumentStatus.COMPLETED
+                )
+            ).distinct()
+            return list(session.scalars(stmt).all())
 
-    def clear_cache(self) -> int:
+    def get_processed_documents(
+        self,
+        engine: Optional[str] = None
+    ) -> List[Document]:
         """
-        Clear all cached processed documents.
+        Get all processed (completed) documents.
+
+        Args:
+            engine: Filter by OCR engine (if None, returns all)
 
         Returns:
-            Number of entries deleted
+            List of Document instances
         """
         with self.get_session() as session:
-            stmt = delete(ProcessedDocumentCache)
-            result = session.execute(stmt)
-            session.commit()
-            return result.rowcount
+            stmt = select(Document).where(
+                Document.status == DocumentStatus.COMPLETED
+            )
+            if engine:
+                stmt = stmt.where(Document.engine == engine)
+            stmt = stmt.order_by(Document.processed_at.desc())
+            return list(session.scalars(stmt).all())
 
-    def save_session_state(self, processed_documents: List[Dict[str, Any]]) -> int:
+    def get_documents_with_engines(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all unique documents with their available engine versions.
+
+        Returns:
+            Dict mapping file_path to info including available engines
+        """
+        documents = self.get_processed_documents()
+        result = {}
+
+        for doc in documents:
+            if doc.file_path not in result:
+                result[doc.file_path] = {
+                    'file_path': doc.file_path,
+                    'file_name': doc.file_name,
+                    'engines': {},
+                    'latest_processed_at': doc.processed_at
+                }
+
+            result[doc.file_path]['engines'][doc.engine] = {
+                'status': doc.status.value if hasattr(doc.status, 'value') else doc.status,
+                'tables_found': doc.tables_found,
+                'text_blocks': doc.text_blocks,
+                'processed_at': doc.processed_at,
+                'markdown_content': doc.markdown_content,
+                'text_content': doc.text_content
+            }
+
+            # Update latest processed time
+            if doc.processed_at and doc.processed_at > result[doc.file_path]['latest_processed_at']:
+                result[doc.file_path]['latest_processed_at'] = doc.processed_at
+
+        return result
+
+    def save_session_state(
+        self,
+        processed_documents: List[Dict[str, Any]],
+        engine: str = "docling"
+    ) -> int:
         """
         Save all processed documents from session state to database.
 
         Called on app shutdown to persist processing results.
+        Now updates the documents table directly.
 
         Args:
             processed_documents: List of processed document dicts from session
+            engine: Default OCR engine used for processing
 
         Returns:
             Number of documents saved
@@ -875,56 +855,75 @@ class DatabaseManager:
                 continue
 
             try:
-                self.save_processed_document(
-                    file_path=file_path,
-                    file_name=doc.get('filename', os.path.basename(file_path)),
-                    status=doc.get('status', 'success'),
-                    tables_found=doc.get('tables_found', 0),
-                    text_blocks=doc.get('text_blocks', 0),
-                    result_json=json.dumps(doc, ensure_ascii=False) if doc else None
-                )
+                # Use engine from doc if available, otherwise use parameter
+                doc_engine = doc.get('engine', engine)
+                file_info = self.get_file_info(file_path)
+
+                with self.get_session() as session:
+                    # Check if document exists for this engine
+                    stmt = select(Document).where(
+                        and_(
+                            Document.file_path == file_path,
+                            Document.engine == doc_engine
+                        )
+                    )
+                    document = session.scalar(stmt)
+
+                    if document:
+                        # Update existing document
+                        document.file_hash = file_info["file_hash"]
+                        document.file_size_bytes = file_info["file_size_bytes"]
+                        document.file_modified_at = file_info["file_modified_at"]
+                        document.tables_found = doc.get('tables_found', 0)
+                        document.text_blocks = doc.get('text_blocks', 0)
+                        document.markdown_content = doc.get('markdown_content')
+                        document.text_content = doc.get('text_content')
+                        if doc.get('status') == 'success':
+                            document.status = DocumentStatus.COMPLETED
+                        session.commit()
+
                 saved_count += 1
             except Exception:
                 continue  # Skip failed saves
 
         return saved_count
 
-    def load_session_state(self) -> List[Dict[str, Any]]:
+    def load_session_state(
+        self,
+        engine: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Load valid processed documents to restore session state.
 
         Called on app startup to restore previous processing results.
+        Now reads from documents table directly.
+
+        Args:
+            engine: Filter by OCR engine (if None, returns all)
 
         Returns:
             List of processed document dicts for session state
         """
-        cached = self.get_all_cached_documents()
+        documents = self.get_processed_documents(engine=engine)
         result = []
 
-        for doc in cached:
-            is_valid, reason = self.is_document_processed(doc.file_path)
+        for doc in documents:
+            is_valid, reason = self.is_document_processed(doc.file_path, engine=doc.engine)
 
             # Only include valid (unchanged) documents
             if is_valid:
-                # Try to restore from JSON, fallback to basic info
-                if doc.result_json:
-                    try:
-                        doc_data = json.loads(doc.result_json)
-                        result.append(doc_data)
-                        continue
-                    except json.JSONDecodeError:
-                        pass
-
-                # Basic info fallback
                 result.append({
-                    'id': f"cached_{doc.id}",
+                    'id': f"doc_{doc.id}",
                     'filename': doc.file_name,
                     'file_path': doc.file_path,
                     'path': doc.file_path,
-                    'status': doc.status,
+                    'status': 'success' if doc.status == DocumentStatus.COMPLETED else 'failed',
                     'tables_found': doc.tables_found,
                     'text_blocks': doc.text_blocks,
-                    'timestamp': doc.processed_at.strftime("%Y-%m-%d %H:%M:%S")
+                    'engine': doc.engine,
+                    'markdown_content': doc.markdown_content,
+                    'text_content': doc.text_content,
+                    'timestamp': doc.processed_at.strftime("%Y-%m-%d %H:%M:%S") if doc.processed_at else None
                 })
 
         return result
@@ -934,19 +933,21 @@ class DatabaseManager:
         file_path: str,
         file_name: str,
         ocr_result,
-        doc_id: str
+        doc_id: str,
+        engine: str = "docling"
     ) -> Optional[int]:
         """
-        Save full OCR results to normalized database tables.
+        Save full OCR results to the documents table and extracted tables.
 
-        Creates or updates Document record and stores all extracted tables
-        with their data in the normalized schema.
+        Creates or updates Document record with OCR content and stores all
+        extracted tables with their data. Single source of truth in documents table.
 
         Args:
             file_path: Full path to the PDF file
             file_name: Original filename
             ocr_result: ProcessedDocument from OCR processor
             doc_id: Document identifier
+            engine: OCR engine used (docling or typhoon)
 
         Returns:
             Document ID if successful, None on failure
@@ -966,32 +967,59 @@ class DatabaseManager:
                 year_be=current_year_be
             )
 
+            # Get file info for hash tracking
+            file_info = self.get_file_info(file_path)
+
+            # Extract OCR content
+            tables_count = len(ocr_result.tables) if hasattr(ocr_result, 'tables') and ocr_result.tables else 0
+            text_blocks_count = len(ocr_result.text_content.split('\n\n')) if hasattr(ocr_result, 'text_content') and ocr_result.text_content else 0
+            markdown_content = ocr_result.markdown if hasattr(ocr_result, 'markdown') else None
+            text_content = ocr_result.text_content if hasattr(ocr_result, 'text_content') else None
+
             with self.get_session() as session:
-                # Check if document already exists
-                stmt = select(Document).where(Document.file_path == file_path)
+                # Check if document already exists for this engine
+                # Each engine gets its own document record (multi-engine support)
+                stmt = select(Document).where(
+                    and_(
+                        Document.file_path == file_path,
+                        Document.engine == engine
+                    )
+                )
                 document = session.scalar(stmt)
 
                 if document:
-                    # Update existing document
+                    # Update existing document for this engine
                     document.status = DocumentStatus.COMPLETED
                     document.processed_at = datetime.utcnow()
+                    document.file_hash = file_info["file_hash"]
+                    document.file_size_bytes = file_info["file_size_bytes"]
+                    document.file_modified_at = file_info["file_modified_at"]
+                    document.markdown_content = markdown_content
+                    document.text_content = text_content
+                    document.tables_found = tables_count
+                    document.text_blocks = text_blocks_count
 
                     # Delete existing tables to replace with new data
                     session.execute(
                         delete(ExtractedTable).where(ExtractedTable.document_id == document.id)
                     )
                 else:
-                    # Create new document
-                    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else None
-
+                    # Create new document for this engine
                     document = Document(
                         fiscal_year_id=default_fiscal_year.id,
                         document_type="Unknown",  # Could be inferred from filename
                         file_path=file_path,
                         file_name=file_name,
+                        file_hash=file_info["file_hash"],
+                        file_size_bytes=file_info["file_size_bytes"],
+                        file_modified_at=file_info["file_modified_at"],
+                        engine=engine,
                         status=DocumentStatus.COMPLETED,
                         processed_at=datetime.utcnow(),
-                        file_size_bytes=file_size
+                        markdown_content=markdown_content,
+                        text_content=text_content,
+                        tables_found=tables_count,
+                        text_blocks=text_blocks_count
                     )
                     session.add(document)
                     session.flush()  # Get document ID
@@ -1012,7 +1040,9 @@ class DatabaseManager:
                     # Get markdown representation if available
                     markdown = None
                     if hasattr(ocr_result, 'markdown') and ocr_result.markdown:
-                        markdown = ocr_result.markdown
+                        # Only use markdown if it's specific to this table (Docling doesn't provide per-table markdown yet)
+                        # markdown = ocr_result.markdown  <-- BUG: This was assigning full doc markdown to every table
+                        pass
 
                     # Store the table
                     self.store_extracted_table(

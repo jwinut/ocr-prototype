@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
-    String, Integer, Float, Text, DateTime, ForeignKey, Enum as SQLEnum
+    String, Integer, Float, Text, DateTime, ForeignKey, Enum as SQLEnum, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 import enum
@@ -75,8 +75,15 @@ class FiscalYear(Base):
 
 
 class Document(Base):
-    """Document entity - individual PDF files."""
+    """Document entity - individual PDF files.
+
+    Supports multiple OCR engine results per file via (file_path, engine) uniqueness.
+    """
     __tablename__ = "documents"
+    __table_args__ = (
+        # Unique constraint on (file_path, engine) to allow multiple versions per engine
+        UniqueConstraint('file_path', 'engine', name='uq_document_filepath_engine'),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     fiscal_year_id: Mapped[int] = mapped_column(ForeignKey("fiscal_years.id"), nullable=False, index=True)
@@ -85,6 +92,10 @@ class Document(Base):
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     file_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)  # SHA256 hash for change detection
     file_modified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # File modification time
+
+    # OCR Engine identification - allows multiple document entries per file (one per engine)
+    engine: Mapped[str] = mapped_column(String(20), default="docling", nullable=False, index=True)
+
     status: Mapped[DocumentStatus] = mapped_column(
         SQLEnum(DocumentStatus),
         default=DocumentStatus.PENDING,
@@ -96,6 +107,12 @@ class Document(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # OCR content (previously in ProcessedDocumentCache)
+    markdown_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Raw markdown output
+    text_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Plain text content
+    tables_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    text_blocks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
     fiscal_year: Mapped["FiscalYear"] = relationship("FiscalYear", back_populates="documents")
@@ -156,31 +173,4 @@ class TableCell(Base):
         return f"<TableCell(table_id={self.extracted_table_id}, pos=[{self.row_index},{self.col_index}])>"
 
 
-class ProcessedDocumentCache(Base):
-    """Cache for processed documents from session state.
-
-    Persists session-based processing results between app restarts.
-    Tracks file changes via hash to invalidate stale results.
-    """
-    __tablename__ = "processed_document_cache"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    file_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
-    file_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    file_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA256 hash
-    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    file_modified_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-
-    # Processing results
-    status: Mapped[str] = mapped_column(String(20), nullable=False)  # success, failed
-    tables_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    text_blocks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Full extracted data as JSON
-
-    # Timestamps
-    processed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    def __repr__(self) -> str:
-        return f"<ProcessedDocumentCache(path={self.file_path}, status={self.status})>"
+# ProcessedDocumentCache removed - content now stored in Document table directly
