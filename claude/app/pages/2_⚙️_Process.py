@@ -60,6 +60,8 @@ if 'selected_file_paths' not in st.session_state:
     st.session_state.selected_file_paths = {}
 if 'processing_status' not in st.session_state:
     st.session_state.processing_status = None
+if 'processing_thread' not in st.session_state:
+    st.session_state.processing_thread = None
 if 'processed_documents' not in st.session_state:
     # Try to load from database on startup
     db = get_db()
@@ -75,17 +77,27 @@ if 'parallel_workers' not in st.session_state:
     st.session_state.parallel_workers = 1
 if 'selected_engines' not in st.session_state:
     st.session_state.selected_engines = ["docling"]
+# Ensure logs list exists before any background thread uses it
+if 'processing_logs' not in st.session_state:
+    st.session_state.processing_logs = []
 
 
 def add_log(message: str, level: str = "info"):
-    """Add a log entry to session state."""
+    """Add a log entry; safe for background threads (falls back to shared queue)."""
     timestamp = datetime.now().strftime("%H:%M:%S")
     log_entry = {
         "timestamp": timestamp,
         "level": level,
         "message": message
     }
-    st.session_state.processing_logs.append(log_entry)
+    try:
+        st.session_state.processing_logs.append(log_entry)
+    except Exception:
+        try:
+            from processing.parallel import add_log_message as _add_log_message
+            _add_log_message(message, level)
+        except Exception:
+            pass
 
 
 def sync_logs_from_processor():
@@ -372,64 +384,62 @@ def main():
 
     st.markdown("---")
 
-    # Processing execution
+    # Prepare documents list once
+    documents = [
+        {"id": doc_id, "file_path": st.session_state.selected_file_paths.get(doc_id)}
+        for doc_id in st.session_state.selected_files
+    ]
+
+    # If processing is running, show live progress (polling)
     if st.session_state.processing_status == "running":
         st.subheader("📊 Progress")
-
-        # Prepare documents for processing
-        documents = [
-            {"id": doc_id, "file_path": st.session_state.selected_file_paths.get(doc_id)}
-            for doc_id in st.session_state.selected_files
-        ]
-
-        # Run processing
-        with st.spinner(f"Processing {len(documents)} documents with {workers} workers..."):
-            final_status = run_parallel_processing(
-                documents=documents,
-                workers=workers
-            )
-
-        # Sync logs from processor
         sync_logs_from_processor()
 
-        # Update status
-        st.session_state.processing_status = "completed"
-        st.session_state.batch_status = final_status
-
-        # Auto-save on completion
-        db = get_db()
-        if db:
-            count = db.save_session_state(st.session_state.processed_documents)
-            add_log(f"💾 Auto-saved {count} documents to database", level="info")
-
-        st.rerun()
-
-    # Show batch status if available
-    if st.session_state.batch_status:
         status = st.session_state.batch_status
+        if status:
+            progress = status.completed / status.total if status.total > 0 else 0
+            st.progress(progress)
 
-        st.subheader("📊 Progress")
+            # Statistics
+            st.markdown("---")
+            st.subheader("📈 Processing Statistics")
 
-        # Progress bar
-        progress = status.completed / status.total if status.total > 0 else 0
-        st.progress(progress)
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("Total", status.total)
+            with col2:
+                st.metric("✅ Successful", status.successful)
+            with col3:
+                st.metric("❌ Failed", status.failed)
+            with col4:
+                st.metric("⏭️ Skipped", status.skipped)
+            with col5:
+                elapsed = status.elapsed_seconds
+                st.metric("⏱️ Time", f"{elapsed:.1f}s")
 
-        # Statistics
-        st.markdown("---")
-        st.subheader("📈 Processing Statistics")
+            if status.is_running:
+                st.caption("Processing... (updates every few seconds)")
+                st.experimental_rerun()
+        else:
+            st.info("Initializing...")
 
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Total", status.total)
-        with col2:
-            st.metric("✅ Successful", status.successful)
-        with col3:
-            st.metric("❌ Failed", status.failed)
-        with col4:
-            st.metric("⏭️ Skipped", status.skipped)
-        with col5:
-            elapsed = status.elapsed_seconds
-            st.metric("⏱️ Time", f"{elapsed:.1f}s")
+    # Kick off processing in a background thread when requested
+    if st.session_state.processing_status == "running" and st.session_state.processing_thread is None:
+        import threading, time
+
+        def worker():
+            final_status = run_parallel_processing(documents=documents, workers=workers)
+            st.session_state.batch_status = final_status
+            st.session_state.processing_status = "completed"
+            # Auto-save on completion
+            db = get_db()
+            if db:
+                count = db.save_session_state(st.session_state.processed_documents)
+                add_log(f"💾 Auto-saved {count} documents to database", level="info")
+
+        t = threading.Thread(target=worker, daemon=True)
+        st.session_state.processing_thread = t
+        t.start()
 
     st.markdown("---")
 
