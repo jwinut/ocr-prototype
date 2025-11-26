@@ -7,6 +7,7 @@ Upload new PDF documents with validation and organization.
 import streamlit as st
 from datetime import datetime
 import os
+from pathlib import Path
 
 st.set_page_config(
     page_title="Upload Documents",
@@ -14,31 +15,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize session state
-if 'uploaded_files' not in st.session_state:
-    st.session_state.uploaded_files = []
-if 'upload_progress' not in st.session_state:
-    st.session_state.upload_progress = 0
-if 'process_after_upload' not in st.session_state:
-    st.session_state.process_after_upload = False
-
-# Mock company data
-MOCK_COMPANIES = [
-    {"code": "10002819", "name": "บริษัท โฮชุง อินดัสเตรียล (ประเทศไทย) จำกัด"},
-    {"code": "10002821", "name": "บริษัท ยาคูลท์ (ประเทศไทย) จำกัด"},
-    {"code": "10002823", "name": "บริษัท ไทย-โอตะ จำกัด"},
-    {"code": "10002828", "name": "บริษัท ไทยซุยซัง จำกัด"},
-    {"code": "10002835", "name": "บริษัท คาร์ออดิโอโทเทิล (ไทยแลนด์) จำกัด"},
-    {"code": "10002836", "name": "บริษัท ไทยซูโกกุ จำกัด"},
-    {"code": "10002843", "name": "บริษัท ไทยมาเชก จำกัด"},
-    {"code": "10002846", "name": "บริษัท ไทยไดกิน (ประเทศไทย) จำกัด"},
-    {"code": "10002847", "name": "บริษัท ซี เอส ไลน์ (ประเทศไทย) จำกัด"},
-    {"code": "10002848", "name": "บริษัท ไทยชินเทค จำกัด"},
-    {"code": "10002849", "name": "บริษัท ไทยไซยา (ประเทศไทย) จำกัด"},
-]
-
-FISCAL_YEARS = [str(year) for year in range(2020, 2025)]
-DOCUMENT_TYPES = ["งบการเงิน", "รายงานประจำปี", "รายงานคณะกรรมการ", "อื่นๆ"]
+try:
+    from app.database import DatabaseManager
+    from app.config import config
+    from models.schema import DocumentStatus
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
 
 def validate_file(file):
     """Validate uploaded file"""
@@ -71,6 +54,28 @@ def main():
     st.markdown("Upload new Thai financial PDF documents")
 
     st.markdown("---")
+
+    if not DB_AVAILABLE:
+        st.error("Database modules not available. Upload disabled.")
+        return
+
+    db = DatabaseManager()
+    db.init_db()
+
+    # Load companies and years from DB
+    companies = db.get_all_companies()
+    company_options = [f"{c.company_code} - {c.name_th or c.name_en or 'Unknown'}" for c in companies]
+    company_options.append("➕ New company")
+
+    fiscal_years = []
+    for c in companies:
+        fiscal_years.extend([fy.year_be for fy in db.get_fiscal_years_by_company(c.id)])
+    fiscal_years = sorted(set(fiscal_years), reverse=True)
+    if not fiscal_years:
+        current_be = datetime.now().year + 543
+        fiscal_years = [current_be]
+
+    document_types = list(config.VALID_DOCUMENT_TYPES) + ["Unknown"]
 
     # Upload section
     st.subheader("📤 Select Files")
@@ -128,26 +133,27 @@ def main():
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                company_options = [f"{c['code']} - {c['name']}" for c in MOCK_COMPANIES]
                 selected_company = st.selectbox(
                     "Company *",
                     options=company_options,
                     help="Select the company these documents belong to"
                 )
-                company_code = selected_company.split(" - ")[0]
-
+                new_company_name = ""
+                if selected_company == "➕ New company":
+                    new_company_name = st.text_input("New company name (TH or EN)")
+                    new_company_code = st.text_input("New company code")
             with col2:
                 selected_year = st.selectbox(
-                    "Fiscal Year *",
-                    options=FISCAL_YEARS,
-                    index=len(FISCAL_YEARS) - 1,  # Default to latest year
-                    help="Select the fiscal year"
+                    "Fiscal Year (BE) *",
+                    options=fiscal_years,
+                    index=0,
+                    help="Select the fiscal year (B.E.)"
                 )
 
             with col3:
                 selected_type = st.selectbox(
                     "Document Type *",
-                    options=DOCUMENT_TYPES,
+                    options=document_types,
                     help="Select the type of document"
                 )
 
@@ -191,25 +197,49 @@ def main():
                     for idx, file in enumerate(valid_files):
                         status_text.info(f"Uploading {file.name}...")
 
-                        # Simulate upload
-                        import time
-                        time.sleep(0.5)
+                        # Resolve company/fiscal year
+                        if selected_company == "➕ New company":
+                            if not new_company_name or not new_company_code:
+                                st.error("Please provide new company name and code.")
+                                break
+                            company = db.get_or_create_company(
+                                company_code=new_company_code,
+                                name_th=new_company_name
+                            )
+                        else:
+                            company_code = selected_company.split(" - ")[0]
+                            company = db.get_or_create_company(company_code=company_code, name_th=None)
+
+                        fiscal_year = db.get_or_create_fiscal_year(company_id=company.id, year_be=int(selected_year))
+
+                        # Save file to uploads directory
+                        uploads_root = config.PROJECT_ROOT / "uploads"
+                        uploads_root.mkdir(parents=True, exist_ok=True)
+                        company_dir = uploads_root / company.company_code / str(selected_year)
+                        company_dir.mkdir(parents=True, exist_ok=True)
+                        dest_path = company_dir / file.name
+
+                        if dest_path.exists() and not overwrite:
+                            st.warning(f"Skipping {file.name} (exists and overwrite is off)")
+                            continue
+
+                        with open(dest_path, "wb") as f:
+                            f.write(file.getbuffer())
+
+                        # Create or update Document entry (engine-specific handled during processing)
+                        from models.schema import DocumentStatus
+                        db.create_document(
+                            fiscal_year_id=fiscal_year.id,
+                            document_type=selected_type,
+                            file_path=str(dest_path),
+                            file_name=file.name,
+                            status=DocumentStatus.PENDING,
+                            file_size_bytes=file.size
+                        )
 
                         # Update progress
                         st.session_state.upload_progress = (idx + 1) / len(valid_files)
                         progress_bar.progress(st.session_state.upload_progress)
-
-                        # Store file info
-                        file_info = {
-                            'filename': file.name,
-                            'size': file.size,
-                            'company_code': company_code,
-                            'year': selected_year,
-                            'type': selected_type,
-                            'uploaded_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'path': f"/Y67/{company_code}/{selected_year}/{file.name}"
-                        }
-                        st.session_state.uploaded_files.append(file_info)
 
                     status_text.empty()
                     progress_bar.empty()
@@ -230,20 +260,21 @@ def main():
                     # Process after upload option
                     if process_after:
                         st.info("🔄 Preparing to process uploaded documents...")
-                        time.sleep(1)
-
-                        # Add uploaded files to selected_files for processing
+                        # Fetch recently added docs for this company/year/type
+                        uploaded_docs = db.get_documents_by_fiscal_year(fiscal_year.id)
                         if 'selected_files' not in st.session_state:
                             st.session_state.selected_files = []
+                        if 'selected_file_paths' not in st.session_state:
+                            st.session_state.selected_file_paths = {}
 
-                        for file_info in st.session_state.uploaded_files[-len(valid_files):]:
-                            doc_id = f"{file_info['company_code']}_{file_info['year']}_{file_info['type']}"
-                            if doc_id not in st.session_state.selected_files:
-                                st.session_state.selected_files.append(doc_id)
+                        for doc in uploaded_docs:
+                            doc_key = f"doc_{doc.id}"
+                            if doc_key not in st.session_state.selected_files:
+                                st.session_state.selected_files.append(doc_key)
+                            st.session_state.selected_file_paths[doc_key] = doc.file_path
 
                         st.switch_page("pages/2_⚙️_Process.py")
                     else:
-                        time.sleep(2)
                         st.rerun()
 
     else:
@@ -252,26 +283,21 @@ def main():
     st.markdown("---")
 
     # Upload history
-    if st.session_state.uploaded_files:
+    if DB_AVAILABLE:
         st.subheader("📋 Recent Uploads")
-
-        # Show last 10 uploads
-        recent_uploads = st.session_state.uploaded_files[-10:]
-
-        for upload in reversed(recent_uploads):
-            with st.expander(f"📄 {upload['filename']} - {upload['uploaded_at']}"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"**Company:** {upload['company_code']}")
-                    st.write(f"**Year:** {upload['year']}")
-                    st.write(f"**Type:** {upload['type']}")
-                with col2:
-                    st.write(f"**Size:** {format_file_size(upload['size'])}")
-                    st.write(f"**Path:** {upload['path']}")
-                    st.write(f"**Uploaded:** {upload['uploaded_at']}")
-
-        if len(st.session_state.uploaded_files) > 10:
-            st.caption(f"Showing 10 most recent of {len(st.session_state.uploaded_files)} total uploads")
+        uploads_root = config.PROJECT_ROOT / "uploads"
+        if uploads_root.exists():
+            files = list(uploads_root.rglob("*.pdf"))
+            latest_files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:10]
+            if latest_files:
+                for f in latest_files:
+                    rel = f.relative_to(config.PROJECT_ROOT)
+                    with st.expander(f"📄 {f.name}"):
+                        st.write(f"**Path:** {rel}")
+                        st.write(f"**Size:** {format_file_size(f.stat().st_size)}")
+                        st.write(f"**Modified:** {datetime.fromtimestamp(f.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                st.info("No uploads yet.")
 
     st.markdown("---")
 
