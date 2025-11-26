@@ -450,7 +450,10 @@ def main():
                 st.metric("⏱️ Time", f"{elapsed:.1f}s")
 
             if status.is_running:
-                st.caption("Processing... refresh to update progress")
+                st.caption("Processing... refreshing shortly to update progress")
+                import time
+                time.sleep(1)
+                st.rerun()
         else:
             st.info("Initializing...")
 

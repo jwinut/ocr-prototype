@@ -427,6 +427,13 @@ class ParallelProcessor:
             elif result.status == "skipped":
                 self.status.skipped += 1
 
+            # Log periodic progress (every 5 completed) for visibility
+            if self.status.completed % 5 == 0:
+                add_log_message(
+                    f"Progress: {self.status.completed}/{self.status.total} completed",
+                    "info"
+                )
+
     def get_status(self) -> Optional[BatchStatus]:
         """Get current processing status."""
         return self.status
