@@ -80,6 +80,10 @@ if 'selected_engines' not in st.session_state:
 # Ensure logs list exists before any background thread uses it
 if 'processing_logs' not in st.session_state:
     st.session_state.processing_logs = []
+if 'processed_documents' not in st.session_state:
+    # Try to load from DB for consistency
+    db = get_db()
+    st.session_state.processed_documents = db.load_session_state() if db else []
 
 
 def add_log(message: str, level: str = "info"):
@@ -125,7 +129,7 @@ def check_already_processed(file_path: str, engine: str = "docling") -> tuple:
     return db.is_document_processed(file_path, engine=engine)
 
 
-def run_parallel_processing(documents: list, workers: int):
+def run_parallel_processing(documents: list, workers: int, engines_override: list | None = None):
     """
     Run parallel processing on documents for one or more engines.
 
@@ -135,7 +139,7 @@ def run_parallel_processing(documents: list, workers: int):
     """
     db = get_db()
 
-    selected_engines = st.session_state.get('selected_engines', ['docling'])
+    selected_engines = engines_override or st.session_state.get('selected_engines', ['docling'])
 
     if not selected_engines:
         add_log("No engines selected; skipping processing.", level="warning")
@@ -426,18 +430,25 @@ def main():
     # Kick off processing in a background thread when requested
     if st.session_state.processing_status == "running" and st.session_state.processing_thread is None:
         import threading, time
+        from streamlit.runtime.scriptrunner import add_script_run_ctx
+
+        engines_snapshot = st.session_state.get('selected_engines', ['docling'])
 
         def worker():
-            final_status = run_parallel_processing(documents=documents, workers=workers)
+            final_status = run_parallel_processing(documents=documents, workers=workers, engines_override=engines_snapshot)
             st.session_state.batch_status = final_status
             st.session_state.processing_status = "completed"
             # Auto-save on completion
             db = get_db()
             if db:
-                count = db.save_session_state(st.session_state.processed_documents)
-                add_log(f"💾 Auto-saved {count} documents to database", level="info")
+                try:
+                    count = db.save_session_state(st.session_state.processed_documents)
+                    add_log(f"💾 Auto-saved {count} documents to database", level="info")
+                except Exception:
+                    pass
 
         t = threading.Thread(target=worker, daemon=True)
+        add_script_run_ctx(t)
         st.session_state.processing_thread = t
         t.start()
 
