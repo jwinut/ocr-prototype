@@ -152,7 +152,7 @@ def main():
         st.warning("No documents found in Y67 folder.")
         st.info("Make sure the Y67 folder exists with PDF documents.")
         if st.button("← Back to Dashboard"):
-            st.switch_page("app/main.py")
+            st.switch_page("main.py")
         return
 
     # Extract unique values for filters
@@ -292,12 +292,20 @@ def main():
 
             with col1:
                 is_selected = doc['id'] in st.session_state.selected_files
-                if st.checkbox("", value=is_selected, key=f"check_{doc['id']}", label_visibility="collapsed"):
-                    if doc['id'] not in st.session_state.selected_files:
-                        st.session_state.selected_files.append(doc['id'])
-                else:
-                    if doc['id'] in st.session_state.selected_files:
-                        st.session_state.selected_files.remove(doc['id'])
+                checkbox_value = st.checkbox(
+                    "Select document",
+                    value=is_selected,
+                    key=f"check_{doc['id']}",
+                    label_visibility="collapsed"
+                )
+
+                # Only update and rerun if the selection actually changed
+                if checkbox_value and doc['id'] not in st.session_state.selected_files:
+                    st.session_state.selected_files.append(doc['id'])
+                    st.rerun()
+                elif not checkbox_value and doc['id'] in st.session_state.selected_files:
+                    st.session_state.selected_files.remove(doc['id'])
+                    st.rerun()
 
             with col2:
                 company_display = doc['company_code']
@@ -350,7 +358,7 @@ def main():
 
     with col1:
         if st.button("← Back to Dashboard", use_container_width=True):
-            st.switch_page("app/main.py")
+            st.switch_page("main.py")
 
     with col2:
         if st.button("🔄 Refresh", use_container_width=True):

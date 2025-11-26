@@ -22,6 +22,7 @@ pythainlp>=5.0.0
 # Utilities
 python-dotenv>=1.0.0
 tqdm>=4.66.0
+pypdf>=4.0.0
 
 # Testing
 pytest>=7.4.0

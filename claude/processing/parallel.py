@@ -14,42 +14,41 @@ from datetime import datetime
 from queue import Queue
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import threading
 
 # Thread-safe logging queue for UI updates
 _log_queue: Queue = Queue()
 _results_lock = Lock()
 
 # Thread-local processor storage for thread safety
-import threading
 _thread_local = threading.local()
-_init_lock = Lock()
-_models_initialized = False
 
 
-def _ensure_models_initialized():
-    """Pre-initialize Docling models (called once before parallel processing)."""
-    global _models_initialized
-    if _models_initialized:
-        return
+def get_thread_processor(engine: str = "docling", languages: tuple = ("th", "en")):
+    """
+    Get thread-local OCR processor instance (each thread gets its own).
+    
+    Args:
+        engine: OCR engine to use ("docling" or "typhoon")
+        languages: Tuple of languages to support
+    """
+    # Initialize processor storage if not exists
+    if not hasattr(_thread_local, 'processors'):
+        _thread_local.processors = {}
 
-    with _init_lock:
-        if _models_initialized:
-            return
-        # Create one processor to trigger model loading
-        add_log_message("🔧 Initializing OCR models (this may take a moment)...", "info")
+    # Check if we already have a processor for this engine
+    if engine in _thread_local.processors:
+        return _thread_local.processors[engine]
+
+    # Create new processor for requested engine
+    if engine == "typhoon":
+        from processing.ocr_typhoon import TyphoonDocumentProcessor
+        _thread_local.processors[engine] = TyphoonDocumentProcessor(languages=languages)
+    else:
         from processing.ocr import DocumentProcessor
-        _init_processor = DocumentProcessor(languages=("th", "en"))
-        # Do a minimal operation to ensure models are loaded
-        add_log_message("✅ OCR models initialized", "success")
-        _models_initialized = True
+        _thread_local.processors[engine] = DocumentProcessor(languages=languages)
 
-
-def get_thread_processor(languages: tuple = ("th", "en")):
-    """Get thread-local DocumentProcessor instance (each thread gets its own)."""
-    if not hasattr(_thread_local, 'processor'):
-        from processing.ocr import DocumentProcessor
-        _thread_local.processor = DocumentProcessor(languages=languages)
-    return _thread_local.processor
+    return _thread_local.processors[engine]
 
 
 @dataclass
@@ -63,6 +62,8 @@ class ProcessingResult:
     text_blocks: int = 0
     error_message: str = ""
     processing_time: float = 0.0
+    text_content: str = ""
+    markdown_content: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 
@@ -124,18 +125,18 @@ def add_log_message(message: str, level: str = "info"):
 def process_single_document(
     doc_id: str,
     file_path: str,
+    engine: str = "docling",
     check_processed_fn: Optional[Callable[[str], Tuple[bool, str]]] = None,
-    save_fn: Optional[Callable] = None,
     save_full_results_fn: Optional[Callable] = None
 ) -> ProcessingResult:
     """
-    Process a single document using Docling OCR (thread-safe).
+    Process a single document using OCR (thread-safe).
 
     Args:
         doc_id: Document identifier
         file_path: Path to the PDF file
+        engine: OCR engine to use
         check_processed_fn: Function to check if already processed
-        save_fn: Function to save result to cache (legacy)
         save_full_results_fn: Function to save full OCR results to database
 
     Returns:
@@ -158,16 +159,16 @@ def process_single_document(
         if reason == 'file_changed':
             add_log_message(f"🔄 File modified, reprocessing: {filename}", "warning")
 
-    add_log_message(f"📄 Processing: {filename}", "info")
+    add_log_message(f"📄 Processing: {filename} (Engine: {engine})", "info")
 
     try:
-        # Use thread-local Docling OCR processor (each thread has its own)
-        processor = get_thread_processor(languages=("th", "en"))
+        # Use thread-local OCR processor (each thread has its own)
+        processor = get_thread_processor(engine=engine, languages=("th", "en"))
         ocr_result = processor.process_single(file_path)
 
         if ocr_result.status == "success":
             tables_found = len(ocr_result.tables)
-            text_blocks = len(ocr_result.text_content.split('\n\n')) if ocr_result.text_content else 0
+            text_blocks = len(ocr_result.text_content.split('\\n\\n')) if ocr_result.text_content else 0
             status = "success"
             add_log_message(f"✅ Completed: {filename} ({tables_found} tables)", "success")
         else:
@@ -186,43 +187,22 @@ def process_single_document(
             status=status,
             tables_found=tables_found,
             text_blocks=text_blocks,
-            processing_time=processing_time
+            processing_time=processing_time,
+            text_content=ocr_result.text_content if ocr_result.status == "success" else "",
+            markdown_content=ocr_result.markdown if ocr_result.status == "success" else ""
         )
 
-        # Save to database if function provided
-        if save_fn and status == "success":
-            try:
-                save_fn(
-                    file_path=file_path,
-                    file_name=filename,
-                    status=status,
-                    tables_found=tables_found,
-                    text_blocks=text_blocks,
-                    result_json=json.dumps({
-                        "id": doc_id,
-                        "filename": filename,
-                        "file_path": file_path,
-                        "path": file_path,
-                        "timestamp": result.timestamp,
-                        "status": status,
-                        "tables_found": tables_found,
-                        "text_blocks": text_blocks
-                    }, ensure_ascii=False)
-                )
-                add_log_message(f"💾 Saved to cache: {filename}", "info")
-            except Exception as e:
-                add_log_message(f"⚠️ Cache save failed: {filename} - {e}", "warning")
-
-        # Save full OCR results to normalized database tables
+        # Save full OCR results to database (single source of truth)
         if save_full_results_fn and status == "success":
             try:
                 save_full_results_fn(
                     file_path=file_path,
                     file_name=filename,
                     ocr_result=ocr_result,
-                    doc_id=doc_id
+                    doc_id=doc_id,
+                    engine=engine
                 )
-                add_log_message(f"💾 Saved full results to database: {filename}", "info")
+                add_log_message(f"💾 Saved full results to database ({engine}): {filename}", "info")
             except Exception as e:
                 add_log_message(f"⚠️ Database save failed: {filename} - {e}", "warning")
 
@@ -278,18 +258,18 @@ class ParallelProcessor:
     def process_documents(
         self,
         documents: List[Dict[str, str]],
+        engine: str = "docling",
         check_processed_fn: Optional[Callable] = None,
-        save_fn: Optional[Callable] = None,
         save_full_results_fn: Optional[Callable] = None,
-        progress_callback: Optional[Callable[[BatchStatus], None]] = None
+        progress_callback: Optional[Callable[[BatchStatus], None]] = None  # Force reload
     ) -> List[ProcessingResult]:
         """
         Process documents in parallel.
 
         Args:
             documents: List of dicts with 'id' and 'file_path' keys
+            engine: OCR engine to use ("docling" or "typhoon")
             check_processed_fn: Optional function to check if doc already processed
-            save_fn: Optional function to save results to cache (legacy)
             save_full_results_fn: Optional function to save full OCR results to database
             progress_callback: Optional callback for progress updates
 
@@ -300,28 +280,36 @@ class ParallelProcessor:
         self.results = []
         self.status = BatchStatus(total=len(documents))
 
-        # Pre-initialize OCR models before starting parallel processing
-        _ensure_models_initialized()
+        add_log_message(f"=== Starting batch processing ({len(documents)} documents, {self.max_workers} workers, engine: {engine}) ===", "info")
 
-        add_log_message(f"=== Starting batch processing ({len(documents)} documents, {self.max_workers} workers) ===", "info")
-
-        if self.max_workers == 1:
-            # Sequential processing
-            self._process_sequential(documents, check_processed_fn, save_fn, save_full_results_fn, progress_callback)
-        else:
-            # Parallel processing
-            self._process_parallel(documents, check_processed_fn, save_fn, save_full_results_fn, progress_callback)
-
-        self.status.is_running = False
-        add_log_message(f"=== Batch complete: {self.status.successful} success, {self.status.failed} failed, {self.status.skipped} skipped ===", "success")
+        try:
+            if self.max_workers == 1:
+                # Sequential processing
+                self._process_sequential(documents, engine, check_processed_fn, save_full_results_fn, progress_callback)
+            else:
+                # Parallel processing
+                self._process_parallel(documents, engine, check_processed_fn, save_full_results_fn, progress_callback)
+        except KeyboardInterrupt:
+            # Graceful shutdown on Ctrl+C
+            add_log_message("⏹️ Interrupt received. Cancelling outstanding tasks and flushing results...", "warning")
+            self.cancel()
+        finally:
+            if self.status:
+                self.status.is_running = False
+            add_log_message(
+                f"=== Batch complete: {self.status.successful if self.status else 0} success, {self.status.failed if self.status else 0} failed, {self.status.skipped if self.status else 0} skipped ===",
+                "success"
+            )
+            if self._cancel_flag:
+                add_log_message("✅ Graceful shutdown complete (all worker threads joined).", "info")
 
         return self.results
 
     def _process_sequential(
         self,
         documents: List[Dict[str, str]],
+        engine: str,
         check_processed_fn: Optional[Callable],
-        save_fn: Optional[Callable],
         save_full_results_fn: Optional[Callable],
         progress_callback: Optional[Callable]
     ):
@@ -339,8 +327,8 @@ class ParallelProcessor:
             result = process_single_document(
                 doc_id=doc_id,
                 file_path=file_path,
+                engine=engine,
                 check_processed_fn=check_processed_fn,
-                save_fn=save_fn,
                 save_full_results_fn=save_full_results_fn
             )
 
@@ -353,58 +341,69 @@ class ParallelProcessor:
     def _process_parallel(
         self,
         documents: List[Dict[str, str]],
+        engine: str,
         check_processed_fn: Optional[Callable],
-        save_fn: Optional[Callable],
         save_full_results_fn: Optional[Callable],
         progress_callback: Optional[Callable]
     ):
         """Process documents in parallel using ThreadPoolExecutor."""
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all tasks
-            future_to_doc = {}
-            for doc in documents:
-                if self._cancel_flag:
-                    break
+        future_to_doc = {}
+        try:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Submit all tasks
+                for doc in documents:
+                    if self._cancel_flag:
+                        break
 
-                future = executor.submit(
-                    process_single_document,
-                    doc_id=doc.get('id', ''),
-                    file_path=doc.get('file_path', ''),
-                    check_processed_fn=check_processed_fn,
-                    save_fn=save_fn,
-                    save_full_results_fn=save_full_results_fn
-                )
-                future_to_doc[future] = doc
-
-            # Collect results as they complete
-            for future in as_completed(future_to_doc):
-                if self._cancel_flag:
-                    # Cancel remaining futures
-                    for f in future_to_doc:
-                        f.cancel()
-                    add_log_message("⚠️ Processing cancelled", "warning")
-                    break
-
-                try:
-                    result = future.result()
-                    self._update_status(result)
-                    self.results.append(result)
-                except Exception as e:
-                    # Handle unexpected errors
-                    doc = future_to_doc[future]
-                    error_result = ProcessingResult(
+                    future = executor.submit(
+                        process_single_document,
                         doc_id=doc.get('id', ''),
                         file_path=doc.get('file_path', ''),
-                        filename=os.path.basename(doc.get('file_path', '')),
-                        status="failed",
-                        error_message=str(e)
+                        engine=engine,
+                        check_processed_fn=check_processed_fn,
+                        save_full_results_fn=save_full_results_fn
                     )
-                    self._update_status(error_result)
-                    self.results.append(error_result)
-                    add_log_message(f"❌ Unexpected error: {e}", "error")
+                    future_to_doc[future] = doc
 
-                if progress_callback:
-                    progress_callback(self.status)
+                # Collect results as they complete
+                for future in as_completed(future_to_doc):
+                    if self._cancel_flag:
+                        # Cancel remaining futures
+                        for f in future_to_doc:
+                            f.cancel()
+                        add_log_message("⚠️ Processing cancelled", "warning")
+                        break
+
+                    try:
+                        result = future.result()
+                        self._update_status(result)
+                        self.results.append(result)
+                    except Exception as e:
+                        # Handle unexpected errors
+                        doc = future_to_doc[future]
+                        error_result = ProcessingResult(
+                            doc_id=doc.get('id', ''),
+                            file_path=doc.get('file_path', ''),
+                            filename=os.path.basename(doc.get('file_path', '')),
+                            status="failed",
+                            error_message=str(e)
+                        )
+                        self._update_status(error_result)
+                        self.results.append(error_result)
+                        add_log_message(f"❌ Unexpected error: {e}", "error")
+
+                    if progress_callback:
+                        progress_callback(self.status)
+        except KeyboardInterrupt:
+            # Ensure all futures are cancelled and executor shuts down cleanly
+            self._cancel_flag = True
+            for f in future_to_doc:
+                f.cancel()
+            add_log_message("⏹️ Interrupt received during parallel processing; cancelling remaining tasks.", "warning")
+        finally:
+            # Executor context manager ensures threads are joined here
+            if self._cancel_flag:
+                add_log_message("🛑 Parallel executor shutdown completed after cancellation.", "info")
 
     def _update_status(self, result: ProcessingResult):
         """Update batch status with result (thread-safe)."""
@@ -436,7 +435,9 @@ class ParallelProcessor:
                 "timestamp": r.timestamp,
                 "status": r.status,
                 "tables_found": r.tables_found,
-                "text_blocks": r.text_blocks
+                "text_blocks": r.text_blocks,
+                "text_content": r.text_content,
+                "markdown_content": r.markdown_content
             }
             for r in self.results
             if r.status == "success"

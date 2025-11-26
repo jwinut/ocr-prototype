@@ -72,7 +72,9 @@ if 'processing_logs' not in st.session_state:
 if 'batch_status' not in st.session_state:
     st.session_state.batch_status = None
 if 'parallel_workers' not in st.session_state:
-    st.session_state.parallel_workers = 4
+    st.session_state.parallel_workers = 1
+if 'selected_engines' not in st.session_state:
+    st.session_state.selected_engines = ["docling"]
 
 
 def add_log(message: str, level: str = "info"):
@@ -93,9 +95,13 @@ def sync_logs_from_processor():
         st.session_state.processing_logs.append(msg)
 
 
-def check_already_processed(file_path: str) -> tuple:
+def check_already_processed(file_path: str, engine: str = "docling") -> tuple:
     """
-    Check if document is already processed and still valid.
+    Check if document is already processed and still valid for a specific engine.
+
+    Args:
+        file_path: Path to the document
+        engine: OCR engine to check (docling or typhoon)
 
     Returns:
         (is_processed, reason) tuple
@@ -104,12 +110,12 @@ def check_already_processed(file_path: str) -> tuple:
     if db is None:
         return False, 'no_db'
 
-    return db.is_document_processed(file_path)
+    return db.is_document_processed(file_path, engine=engine)
 
 
 def run_parallel_processing(documents: list, workers: int):
     """
-    Run parallel processing on documents.
+    Run parallel processing on documents for one or more engines.
 
     Args:
         documents: List of dicts with 'id' and 'file_path'
@@ -117,43 +123,59 @@ def run_parallel_processing(documents: list, workers: int):
     """
     db = get_db()
 
-    # Create processor
-    processor = ParallelProcessor(max_workers=workers)
+    selected_engines = st.session_state.get('selected_engines', ['docling'])
 
-    # Store processor in session for cancellation
-    st.session_state.processor = processor
+    if not selected_engines:
+        add_log("No engines selected; skipping processing.", level="warning")
+        return None
 
-    # Define save function for cache database (legacy)
-    def save_fn(**kwargs):
-        if db:
-            db.save_processed_document(**kwargs)
+    last_status = None
 
-    # Define save function for full OCR results to normalized tables
-    def save_full_results_fn(**kwargs):
-        if db:
-            db.save_full_ocr_results(**kwargs)
+    for current_engine in selected_engines:
+        add_log(f"=== Starting engine: {current_engine.upper()} ===", level="info")
 
-    # Define progress callback
-    def progress_cb(status: BatchStatus):
-        st.session_state.batch_status = status
+        # Create processor per engine run
+        processor = ParallelProcessor(max_workers=workers)
+        st.session_state.processor = processor  # for cancellation support
 
-    # Run processing
-    results = processor.process_documents(
-        documents=documents,
-        check_processed_fn=check_already_processed if db else None,
-        save_fn=save_fn,
-        save_full_results_fn=save_full_results_fn,
-        progress_callback=progress_cb
-    )
+        # Define check function with engine captured in closure
+        def check_processed_with_engine(file_path: str, engine=current_engine) -> tuple:
+            """Check if document is processed for the captured engine."""
+            return check_already_processed(file_path, engine=engine)
 
-    # Add successful results to session state
-    for result_dict in processor.get_successful_results():
-        # Check if already in session state
-        existing_ids = [d.get('id') for d in st.session_state.processed_documents]
-        if result_dict['id'] not in existing_ids:
-            st.session_state.processed_documents.append(result_dict)
+        # Define save function for full OCR results to database
+        def save_full_results_fn(**kwargs):
+            if db:
+                try:
+                    db.save_full_ocr_results(**kwargs)
+                except Exception as e:
+                    import traceback
+                    print(f"ERROR in save_full_results_fn: {e}")
+                    print(traceback.format_exc())
+                    raise  # Re-raise so parallel.py can log it too
 
-    return processor.get_status()
+        # Define progress callback
+        def progress_cb(status: BatchStatus):
+            st.session_state.batch_status = status
+
+        # Run processing
+        results = processor.process_documents(
+            documents=documents,
+            engine=current_engine,
+            check_processed_fn=check_processed_with_engine if db else None,
+            save_full_results_fn=save_full_results_fn,
+            progress_callback=progress_cb  # Force reload
+        )
+
+        # Add successful results to session state
+        for result_dict in processor.get_successful_results():
+            existing_ids = [d.get('id') for d in st.session_state.processed_documents]
+            if result_dict['id'] not in existing_ids:
+                st.session_state.processed_documents.append(result_dict)
+
+        last_status = processor.get_status()
+
+    return last_status
 
 
 def main():
@@ -189,23 +211,33 @@ def main():
     # Selected files summary
     st.subheader("📋 Selected Documents")
 
-    # Check how many are already processed
+    # Check how many are already processed across selected engines
     already_processed = 0
     needs_reprocess = 0
     pending = 0
+    selected_engines = st.session_state.get('selected_engines', ['docling'])
 
-    for doc_id in st.session_state.selected_files:
-        file_path = st.session_state.selected_file_paths.get(doc_id)
-        if file_path:
-            is_processed, reason = check_already_processed(file_path)
-            if is_processed:
+    if not selected_engines:
+        pending = len(st.session_state.selected_files)
+        st.warning("Select at least one engine to process.")
+    else:
+        for doc_id in st.session_state.selected_files:
+            file_path = st.session_state.selected_file_paths.get(doc_id)
+            if not file_path:
+                pending += 1
+                continue
+
+            per_engine_status = []
+            for eng in selected_engines:
+                is_processed, reason = check_already_processed(file_path, engine=eng)
+                per_engine_status.append((is_processed, reason))
+
+            if per_engine_status and all(flag for flag, _ in per_engine_status):
                 already_processed += 1
-            elif reason == 'file_changed':
+            elif any(reason == 'file_changed' for _, reason in per_engine_status):
                 needs_reprocess += 1
             else:
                 pending += 1
-        else:
-            pending += 1
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -225,26 +257,54 @@ def main():
     # Processing Configuration
     st.subheader("⚡ Processing Configuration")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        workers = st.slider(
+        st.markdown("**OCR Engines**")
+        docling_checked = st.checkbox("🔧 Docling (Local)", value="docling" in st.session_state.selected_engines)
+        typhoon_checked = st.checkbox("🌊 Typhoon (Cloud API)", value="typhoon" in st.session_state.selected_engines)
+
+        new_engines = []
+        if docling_checked:
+            new_engines.append("docling")
+        if typhoon_checked:
+            new_engines.append("typhoon")
+
+        if not new_engines:
+            st.warning("Select at least one engine.")
+        if new_engines != st.session_state.selected_engines:
+            st.session_state.selected_engines = new_engines
+            st.rerun()
+
+    with col2:
+        worker_options = [1, 2, 3]
+        current_workers = st.session_state.parallel_workers
+        # Ensure current value is valid
+        if current_workers not in worker_options:
+            current_workers = 1
+        workers = st.selectbox(
             "Parallel Workers",
-            min_value=1,
-            max_value=8,
-            value=st.session_state.parallel_workers,
-            help="Number of documents to process simultaneously. Higher = faster but uses more resources."
+            options=worker_options,
+            index=worker_options.index(current_workers),
+            help="Number of documents to process simultaneously. Default: 1 (sequential)."
         )
         st.session_state.parallel_workers = workers
 
-    with col2:
-        # Show time estimate
+    with col3:
+        # Show time estimate (per-engine total)
         docs_to_process = pending + needs_reprocess
-        if docs_to_process > 0:
+        engines_to_run = st.session_state.get('selected_engines', ['docling'])
+        total_tasks = docs_to_process * max(1, len(engines_to_run))
+        if docs_to_process > 0 and engines_to_run:
+            # Rough per-engine averages
+            per_engine_time = []
+            for eng in engines_to_run:
+                per_engine_time.append(15.0 if eng == "docling" else 8.0)
+            avg_time = sum(per_engine_time) / len(per_engine_time)
             estimate = estimate_processing_time(
-                num_documents=docs_to_process,
+                num_documents=total_tasks,
                 max_workers=workers,
-                avg_seconds_per_doc=15.0  # Real OCR processing time
+                avg_seconds_per_doc=avg_time
             )
             st.metric(
                 "Est. Time",
@@ -268,15 +328,23 @@ def main():
             st.info("Ready to start processing")
 
     with col2:
+        engines_selected = st.session_state.get('selected_engines', [])
         if st.session_state.processing_status != "running":
-            if st.button("▶️ Start Processing", use_container_width=True, type="primary"):
+            if st.button(
+                "▶️ Start Processing",
+                use_container_width=True,
+                type="primary",
+                disabled=not engines_selected
+            ):
                 st.session_state.processing_status = "running"
                 st.session_state.processing_logs = []
                 st.session_state.batch_status = None
+                engines = st.session_state.get('selected_engines', ['docling'])
                 add_log("=== Processing started ===", level="info")
+                add_log(f"Engines: {', '.join([e.upper() for e in engines])}", level="info")
                 add_log(f"Workers: {workers}", level="info")
                 if already_processed > 0:
-                    add_log(f"ℹ️ {already_processed} documents will be skipped (already processed)", level="info")
+                    add_log(f"ℹ️ {already_processed} documents will be skipped (already processed for selected engines)", level="info")
                 st.rerun()
 
     with col3:

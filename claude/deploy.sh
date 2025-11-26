@@ -172,6 +172,15 @@ start_app() {
         --server.port 8501 \
         --server.address localhost \
         --browser.gatherUsageStats false 2>&1 | tee -a "$LOG_FILE"
+
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" -eq 130 ]; then
+        log "${YELLOW}Graceful shutdown requested (SIGINT). Waiting for cleanup...${NC}"
+        log_plain "Graceful shutdown requested (SIGINT) at $(date)"
+    else
+        log "${YELLOW}Streamlit exited with code $EXIT_CODE${NC}"
+        log_plain "Streamlit exited with code $EXIT_CODE at $(date)"
+    fi
 }
 
 # Cleanup old logs (keep last 10)
@@ -195,7 +204,7 @@ main() {
 }
 
 # Run with error handling
-trap 'log "\n${RED}Deployment interrupted${NC}"; log_plain "Deployment interrupted at $(date)"; exit 1' INT TERM
+trap 'log "\n${RED}Deployment interrupted (signal caught)${NC}"; log_plain "Deployment interrupted (signal) at $(date)"; exit 1' INT TERM
 
 # Log script arguments
 log_plain "Script arguments: $@"
