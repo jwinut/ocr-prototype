@@ -42,8 +42,9 @@ def _html_table_to_dataframe(html_table: str) -> Optional[pd.DataFrame]:
         DataFrame or None if parsing fails
     """
     try:
-        # Use pandas read_html to parse
-        dfs = pd.read_html(html_table)
+        # Use pandas read_html to parse; wrap literal string in StringIO to avoid deprecation
+        from io import StringIO
+        dfs = pd.read_html(StringIO(html_table))
         if dfs:
             return dfs[0]
     except Exception:
